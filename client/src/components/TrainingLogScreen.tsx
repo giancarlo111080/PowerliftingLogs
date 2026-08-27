@@ -1,0 +1,262 @@
+import { useState } from "react";
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Plus, Send, X } from "lucide-react-native";
+
+import { useProxySession } from "../auth/ProxySessionContext";
+import { type ProgramDay, type ProgramDaySetLog, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
+import { AppShell } from "./AppShell";
+import { InstagramLinkModal } from "./InstagramLinkModal";
+
+interface ScheduledDay {
+  weekId: string;
+  weekNumber: number;
+  weekName: string;
+  day: ProgramDay;
+}
+
+interface InstagramTarget {
+  exerciseId: string;
+  exerciseName: string;
+  setNumber: number;
+}
+
+interface WorkoutDraft {
+  name: string;
+  focus: string;
+  scheduledDate: string;
+}
+
+interface AccessoryDraft {
+  name: string;
+  sets: string;
+  repetitions: string;
+  prescriptionMode: "rpe" | "rir" | "exact";
+  prescriptionValue: string;
+  weightUnit: "kg" | "lb";
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T00:00:00.000Z`));
+}
+
+function isIsoDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
+}
+
+function prescriptionLabel(exercise: ProgramDay["exercises"][number]) {
+  return exercise.prescriptionMode === "exact"
+    ? `${exercise.prescriptionValue} ${exercise.weightUnit}`
+    : `${exercise.prescriptionMode.toUpperCase()} ${exercise.prescriptionValue}`;
+}
+
+function getSetLog(logs: ProgramDaySetLog[], exerciseId: string, setNumber: number) {
+  return logs.find((log) => log.exerciseId === exerciseId && log.setNumber === setNumber);
+}
+
+function SetStatusIcon({ status }: { status: "pending" | "done" | "skipped" }) {
+  if (status === "done") {
+    return <Check size={16} color="#FFFFFF" strokeWidth={3} />;
+  }
+  if (status === "skipped") {
+    return <Minus size={16} color="#FFFFFF" strokeWidth={3} />;
+  }
+  return <Circle size={16} color="#688078" strokeWidth={2} />;
+}
+
+export function TrainingLogScreen() {
+  const { session, currentProfile, activeAthlete } = useProxySession();
+  const { programs, comments, dayLogs, isLoading, addDay, addExercise, logDaySet, updateDaySetInstagramLink, updateDayRating, addComment } = useProgramWorkspaceStore();
+  const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
+  const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
+  const [actualWeightDrafts, setActualWeightDrafts] = useState<Record<string, string>>({});
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [instagramTarget, setInstagramTarget] = useState<InstagramTarget | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [isAddingWorkout, setIsAddingWorkout] = useState(false);
+  const [workoutDraft, setWorkoutDraft] = useState<WorkoutDraft>({ name: "", focus: "", scheduledDate: "" });
+  const [isAddingAccessory, setIsAddingAccessory] = useState(false);
+  const [accessoryDraft, setAccessoryDraft] = useState<AccessoryDraft>({ name: "", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg" });
+
+  const isCoach = session?.role === "coach";
+  const athlete = isCoach ? activeAthlete : currentProfile;
+  const athletePrograms = programs.filter((program) => program.athleteId === athlete?.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const selectedProgram = athletePrograms.find((program) => program.id === selectedProgramId) ?? athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
+  const scheduledDays: ScheduledDay[] = selectedProgram
+    ? [...selectedProgram.weeks].sort((left, right) => left.weekNumber - right.weekNumber).flatMap((week) => [...week.days].sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)).map((day) => ({ weekId: week.id, weekNumber: week.weekNumber, weekName: week.name, day })))
+    : [];
+  const selectedDayIndex = Math.max(0, scheduledDays.findIndex((entry) => entry.day.id === selectedDayId));
+  const selectedEntry = scheduledDays[selectedDayIndex] ?? null;
+  const dayLog = selectedEntry && selectedProgram ? dayLogs.find((entry) => entry.programId === selectedProgram.id && entry.dayId === selectedEntry.day.id) : undefined;
+  const selectedDayComments = selectedEntry && selectedProgram ? comments.filter((comment) => comment.programId === selectedProgram.id && comment.dayId === selectedEntry.day.id).sort((left, right) => left.createdAt.localeCompare(right.createdAt)) : [];
+  const commentDraft = selectedEntry ? commentDrafts[selectedEntry.day.id] ?? "" : "";
+
+  if (!session || !currentProfile || !athlete) {
+    return <AppShell title="Training Log"><View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /></View></AppShell>;
+  }
+
+  function selectProgram(program: TrainingProgram) {
+    setSelectedProgramId(program.id);
+    setSelectedDayId(null);
+    setMessage(null);
+  }
+
+  function selectDay(dayId: string) {
+    setSelectedDayId(dayId);
+    setMessage(null);
+  }
+
+  function openWorkoutCreator() {
+    if (!selectedProgram) {
+      return;
+    }
+    setWorkoutDraft({ name: "", focus: "", scheduledDate: selectedEntry?.day.scheduledDate ?? selectedProgram.startDate });
+    setIsAddingWorkout(true);
+    setIsAddingAccessory(false);
+  }
+
+  async function saveWorkout() {
+    if (!isCoach || !selectedProgram) {
+      return;
+    }
+    const weekId = selectedEntry?.weekId ?? selectedProgram.weeks[0]?.id;
+    if (!weekId) {
+      setMessage("Add a week in Programs before adding a workout.");
+      return;
+    }
+    if (!workoutDraft.name.trim() || !workoutDraft.focus.trim() || !isIsoDate(workoutDraft.scheduledDate)) {
+      setMessage("Enter a workout name, focus, and date as YYYY-MM-DD.");
+      return;
+    }
+    try {
+      const createdDay = await addDay(selectedProgram.id, weekId, workoutDraft);
+      setSelectedDayId(createdDay.id);
+      setIsAddingWorkout(false);
+      setMessage(`${createdDay.name} added to the training log.`);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not add this workout.");
+    }
+  }
+
+  function openAccessoryCreator() {
+    if (!selectedEntry) {
+      setMessage("Choose a training day before adding an accessory.");
+      return;
+    }
+    setAccessoryDraft({ name: "", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg" });
+    setIsAddingAccessory(true);
+    setIsAddingWorkout(false);
+  }
+
+  async function saveAccessory() {
+    if (!isCoach || !selectedProgram || !selectedEntry) {
+      return;
+    }
+    const sets = Number(accessoryDraft.sets);
+    const repetitions = Number(accessoryDraft.repetitions);
+    const prescriptionValue = Number(accessoryDraft.prescriptionValue);
+    if (!accessoryDraft.name.trim() || !Number.isInteger(sets) || sets < 1 || !Number.isInteger(repetitions) || repetitions < 1 || !Number.isFinite(prescriptionValue) || prescriptionValue < 0) {
+      setMessage("Enter an accessory name, whole-number sets and reps, and a valid prescription target.");
+      return;
+    }
+    try {
+      await addExercise(selectedProgram.id, selectedEntry.weekId, selectedEntry.day.id, "accessory", {
+        name: accessoryDraft.name.trim(),
+        sets,
+        repetitions,
+        prescriptionMode: accessoryDraft.prescriptionMode,
+        prescriptionValue,
+        weightUnit: accessoryDraft.weightUnit
+      });
+      setIsAddingAccessory(false);
+      setMessage(`${accessoryDraft.name.trim()} added to ${selectedEntry.day.name}.`);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not add this accessory.");
+    }
+  }
+
+  function weightDraftKey(exerciseId: string, setNumber: number) {
+    return `${selectedEntry?.day.id ?? "day"}-${exerciseId}-${setNumber}`;
+  }
+
+  async function updateSet(exercise: ProgramDay["exercises"][number], setNumber: number, completionStatus: "pending" | "done" | "skipped") {
+    if (!selectedProgram || !selectedEntry || isCoach) {
+      return;
+    }
+    const existingSetLog = getSetLog(dayLog?.sets ?? [], exercise.id, setNumber);
+    const weightValue = actualWeightDrafts[weightDraftKey(exercise.id, setNumber)] ?? existingSetLog?.actualWeight?.toString() ?? "";
+    const actualWeight = Number(weightValue);
+    if (completionStatus === "done" && exercise.prescriptionMode !== "exact" && (!Number.isFinite(actualWeight) || actualWeight <= 0)) {
+      setMessage(`Enter the weight lifted for set ${setNumber} before marking it done.`);
+      return;
+    }
+    try {
+      await logDaySet(selectedProgram.id, selectedEntry.day.id, exercise.id, setNumber, completionStatus, completionStatus === "done" && exercise.prescriptionMode !== "exact" ? actualWeight : undefined, exercise.weightUnit);
+      setMessage(completionStatus === "done" ? `Set ${setNumber} logged.` : completionStatus === "skipped" ? `Set ${setNumber} marked skipped.` : `Set ${setNumber} returned to pending.`);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not update this set.");
+    }
+  }
+
+  async function saveInstagramLink(instagramVideoUrl: string) {
+    if (!selectedProgram || !selectedEntry || !instagramTarget) {
+      return;
+    }
+    await updateDaySetInstagramLink(selectedProgram.id, selectedEntry.day.id, instagramTarget.exerciseId, instagramTarget.setNumber, instagramVideoUrl);
+    setMessage("Instagram link added to this set.");
+  }
+
+  async function saveRating(rating: number) {
+    if (!selectedProgram || !selectedEntry || isCoach) {
+      return;
+    }
+    const nextRating = dayLog?.sessionRating === rating ? null : rating;
+    await updateDayRating(selectedProgram.id, selectedEntry.day.id, nextRating);
+    setMessage(nextRating ? `Session rating saved: ${nextRating}/10.` : "Session rating cleared.");
+  }
+
+  async function submitComment() {
+    if (!selectedProgram || !selectedEntry || !commentDraft.trim()) {
+      return;
+    }
+    await addComment({ programId: selectedProgram.id, dayId: selectedEntry.day.id, authorProfileId: currentProfile.id, authorName: currentProfile.displayName, authorRole: session.role, body: commentDraft.trim() });
+    setCommentDrafts((drafts) => ({ ...drafts, [selectedEntry.day.id]: "" }));
+  }
+
+  return (
+    <AppShell title="Training Log">
+      <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-6 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
+        <View className="flex-col gap-3 border-l-4 border-signal pl-4 sm:flex-row sm:items-end sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{isCoach ? "Athlete training log" : "Your program"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">{isCoach ? `${athlete.displayName}'s workouts` : "Training Log"}</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{isCoach ? "Navigate every workout, review actual loads and footage, then leave feedback in context." : "Every scheduled workout, actual set, video, rating, and coach note lives here."}</Text></View>{selectedProgram ? <View className="flex-row items-center gap-2"><CalendarDays size={18} color="#2E6F5E" /><Text className="font-serif text-sm font-bold text-ink">{scheduledDays.length} workout{scheduledDays.length === 1 ? "" : "s"}</Text></View> : null}</View>
+        {message ? <View className="border border-moss bg-[#2E6F5E12] px-4 py-3"><Text className="font-serif text-sm text-moss">{message}</Text></View> : null}
+        {isLoading ? <View className="items-center border border-fog bg-paper py-12"><ActivityIndicator color="#2E6F5E" /><Text className="mt-3 font-serif text-sm text-[#52675F]">Loading training logs</Text></View> : null}
+
+        {!isLoading && athletePrograms.length ? <><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Program</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="mt-2 gap-2">{athletePrograms.map((program) => <Pressable key={program.id} className={`w-56 border p-3 ${selectedProgram?.id === program.id ? "border-ink bg-ink" : "border-fog bg-paper"}`} onPress={() => selectProgram(program)}><Text className={`font-serif text-sm font-bold ${selectedProgram?.id === program.id ? "text-white" : "text-ink"}`}>{program.name}</Text><Text className={`mt-1 font-serif text-xs ${selectedProgram?.id === program.id ? "text-[#FFFFFFCC]" : "text-[#52675F]"}`}>{program.phase} · {program.status}</Text></Pressable>)}</ScrollView></View>
+          {!selectedEntry && selectedProgram && isCoach ? <View className="border border-fog bg-paper p-4"><View className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Build this log</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add the first workout</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">Create a dated day in {selectedProgram.weeks[0]?.name ?? "the first week"}, then add its prescriptions.</Text></View>{!isAddingWorkout ? <Pressable className="min-h-10 flex-row items-center justify-center gap-2 rounded-md bg-ink px-3 py-2" onPress={openWorkoutCreator} accessibilityLabel="Add the first workout"><Plus size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable> : null}</View>{isAddingWorkout ? <View className="mt-4 border-t border-fog pt-4"><View className="flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.name} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, name: value }))} placeholder="Workout name, e.g. Day 1" placeholderTextColor="#688078" accessibilityLabel="Workout name" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.scheduledDate} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, scheduledDate: value }))} placeholder="YYYY-MM-DD" placeholderTextColor="#688078" accessibilityLabel="Workout date" /></View><TextInput className="mt-3 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.focus} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, focus: value }))} placeholder="Workout focus" placeholderTextColor="#688078" accessibilityLabel="Workout focus" /><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingWorkout(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveWorkout()}><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable></View></View> : null}</View> : null}
+          {selectedEntry && selectedProgram ? <><View><View className="mb-2 flex-row items-center justify-between"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">All training days</Text><Text className="font-serif text-xs text-[#52675F]">Week {selectedEntry.weekNumber} of {selectedProgram.weeks.length}</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2">{scheduledDays.map((entry) => <Pressable key={entry.day.id} className={`w-36 border p-3 ${entry.day.id === selectedEntry.day.id ? "border-ink bg-ink" : "border-fog bg-paper"}`} onPress={() => selectDay(entry.day.id)} accessibilityLabel={`Open ${entry.weekName}, ${entry.day.name}`}><Text className={`font-serif text-xs font-bold ${entry.day.id === selectedEntry.day.id ? "text-[#FFFFFFCC]" : "text-[#688078]"}`}>Week {entry.weekNumber}</Text><Text className={`mt-1 font-serif text-sm font-bold ${entry.day.id === selectedEntry.day.id ? "text-white" : "text-ink"}`}>{entry.day.name}</Text><Text className={`mt-1 font-serif text-xs ${entry.day.id === selectedEntry.day.id ? "text-[#FFFFFFCC]" : "text-[#52675F]"}`}>{formatDate(entry.day.scheduledDate)}</Text></Pressable>)}</ScrollView></View>
+            <View className="flex-col gap-4 border-y border-fog bg-canvas py-5 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{selectedEntry.weekName} · {formatDate(selectedEntry.day.scheduledDate)}</Text><Text className="mt-1 font-serif text-2xl font-bold text-ink">{selectedEntry.day.name}</Text><Text className="mt-1 font-serif text-sm leading-6 text-[#52675F]">{selectedEntry.day.focus}</Text></View><View className="flex-row flex-wrap gap-2">{isCoach ? <><Pressable className="min-h-10 flex-row items-center gap-2 rounded-md bg-ink px-3 py-2" onPress={openWorkoutCreator} accessibilityLabel="Add workout day to training log"><Plus size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Workout</Text></Pressable><Pressable className="min-h-10 flex-row items-center gap-2 rounded-md border border-fog bg-paper px-3 py-2" onPress={openAccessoryCreator} accessibilityLabel="Add accessory to selected workout"><Plus size={16} color="#17212B" /><Text className="font-serif text-sm font-bold text-ink">Accessory</Text></Pressable></> : null}<Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === 0} onPress={() => selectDay(scheduledDays[selectedDayIndex - 1].day.id)} accessibilityLabel="Open previous training day"><ChevronLeft size={18} color="#17212B" /></Pressable><Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === scheduledDays.length - 1} onPress={() => selectDay(scheduledDays[selectedDayIndex + 1].day.id)} accessibilityLabel="Open next training day"><ChevronRight size={18} color="#17212B" /></Pressable></View></View>
+            {isCoach && isAddingWorkout ? <View className="border border-fog bg-paper p-4"><View className="flex-row items-center justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">New workout</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add to {selectedEntry.weekName}</Text></View><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-fog" onPress={() => setIsAddingWorkout(false)} accessibilityLabel="Close new workout form"><X size={17} color="#17212B" /></Pressable></View><View className="mt-4 flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.name} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, name: value }))} placeholder="Workout name, e.g. Day 3" placeholderTextColor="#688078" accessibilityLabel="Workout name" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.scheduledDate} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, scheduledDate: value }))} placeholder="YYYY-MM-DD" placeholderTextColor="#688078" accessibilityLabel="Workout date" /></View><TextInput className="mt-3 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.focus} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, focus: value }))} placeholder="Workout focus" placeholderTextColor="#688078" accessibilityLabel="Workout focus" /><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingWorkout(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveWorkout()}><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable></View></View> : null}
+            {isCoach && isAddingAccessory ? <View className="border border-fog bg-paper p-4"><View className="flex-row items-center justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Accessory prescription</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add to {selectedEntry.day.name}</Text></View><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-fog" onPress={() => setIsAddingAccessory(false)} accessibilityLabel="Close accessory form"><X size={17} color="#17212B" /></Pressable></View><TextInput className="mt-4 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.name} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, name: value }))} placeholder="Accessory name, e.g. Chest-supported row" placeholderTextColor="#688078" accessibilityLabel="Accessory name" /><View className="mt-3 flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.sets} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, sets: value }))} keyboardType="number-pad" placeholder="Sets" placeholderTextColor="#688078" accessibilityLabel="Accessory sets" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.repetitions} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, repetitions: value }))} keyboardType="number-pad" placeholder="Reps" placeholderTextColor="#688078" accessibilityLabel="Accessory repetitions" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.prescriptionValue} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, prescriptionValue: value }))} keyboardType="decimal-pad" placeholder="Target" placeholderTextColor="#688078" accessibilityLabel="Accessory prescription target" /></View><View className="mt-3 flex-row flex-wrap gap-2">{(["rpe", "rir", "exact"] as const).map((mode) => <Pressable key={mode} className={`rounded-md border px-3 py-2 ${accessoryDraft.prescriptionMode === mode ? "border-ink bg-ink" : "border-fog bg-canvas"}`} onPress={() => setAccessoryDraft((draft) => ({ ...draft, prescriptionMode: mode }))}><Text className={`font-serif text-sm font-bold ${accessoryDraft.prescriptionMode === mode ? "text-white" : "text-ink"}`}>{mode.toUpperCase()}</Text></Pressable>)}{(["kg", "lb"] as const).map((unit) => <Pressable key={unit} className={`rounded-md border px-3 py-2 ${accessoryDraft.weightUnit === unit ? "border-moss bg-[#2E6F5E1A]" : "border-fog bg-canvas"}`} onPress={() => setAccessoryDraft((draft) => ({ ...draft, weightUnit: unit }))}><Text className="font-serif text-sm font-bold text-ink">{unit}</Text></Pressable>)}</View><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingAccessory(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveAccessory()}><Text className="font-serif text-sm font-bold text-white">Add accessory</Text></Pressable></View></View> : null}
+            <View className="border border-fog bg-paper p-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Session rating</Text><View className="mt-2 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-lg font-bold text-ink">{dayLog?.sessionRating ? `${dayLog.sessionRating} / 10` : "Not rated"}</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">{isCoach ? "Athlete-reported effort for future stress management." : "Rate how demanding this session felt after you train."}</Text></View>{isCoach ? null : <View className="flex-row flex-wrap gap-1.5">{Array.from({ length: 10 }, (_, index) => index + 1).map((rating) => <Pressable key={rating} className={`h-9 w-9 items-center justify-center rounded-md border ${dayLog?.sessionRating === rating ? "border-ink bg-ink" : "border-fog bg-canvas"}`} onPress={() => void saveRating(rating)} accessibilityLabel={`Rate this session ${rating} out of 10`}><Text className={`font-serif text-sm font-bold ${dayLog?.sessionRating === rating ? "text-white" : "text-ink"}`}>{rating}</Text></Pressable>)}</View>}</View></View>
+            {selectedEntry.day.exercises.length ? selectedEntry.day.exercises.map((exercise) => <View key={exercise.id} className="border border-fog bg-paper"><View className="flex-col gap-1 border-b border-fog px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-lg font-bold text-ink">{exercise.name}</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">{exercise.sets} sets · {exercise.repetitions} reps · {prescriptionLabel(exercise)}</Text></View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{exercise.category}</Text></View>{Array.from({ length: exercise.sets }, (_, index) => {
+              const setNumber = index + 1;
+              const setLog = getSetLog(dayLog?.sets ?? [], exercise.id, setNumber);
+              const status = setLog?.completionStatus ?? "pending";
+              const weightKey = weightDraftKey(exercise.id, setNumber);
+              const actualWeight = actualWeightDrafts[weightKey] ?? setLog?.actualWeight?.toString() ?? "";
+              const needsActualWeight = exercise.prescriptionMode !== "exact";
+              return <View key={setNumber} className="gap-3 border-b border-fog px-4 py-4 last:border-b-0"><View className="flex-row items-center gap-3"><Text className="w-7 font-serif text-sm font-bold text-ink">{setNumber}</Text><View className="flex-1"><Text className="font-serif text-sm font-bold text-ink">{exercise.repetitions} reps · {prescriptionLabel(exercise)}</Text><Text className="mt-1 font-serif text-xs text-[#688078]">{status === "done" ? `Logged${setLog?.actualWeight ? ` · ${setLog.actualWeight} ${setLog.weightUnit}` : ""}` : status === "skipped" ? "Skipped" : needsActualWeight ? `Enter actual ${exercise.weightUnit} to complete` : "Exact prescribed load"}</Text></View>{isCoach ? <Text className={`font-serif text-xs font-bold ${status === "done" ? "text-moss" : status === "skipped" ? "text-signal" : "text-[#52675F]"}`}>{status === "pending" ? "Pending" : status === "done" ? "Done" : "Skipped"}</Text> : <View className="flex-row gap-2"><Pressable className={`h-9 w-9 items-center justify-center rounded-md border ${status === "done" ? "border-moss bg-moss" : "border-fog bg-paper"}`} onPress={() => void updateSet(exercise, setNumber, status === "done" ? "pending" : "done")} accessibilityLabel={`${status === "done" ? "Clear" : "Mark"} set ${setNumber} done`}><SetStatusIcon status={status === "done" ? "done" : "pending"} /></Pressable><Pressable className={`h-9 w-9 items-center justify-center rounded-md border ${status === "skipped" ? "border-signal bg-signal" : "border-fog bg-paper"}`} onPress={() => void updateSet(exercise, setNumber, status === "skipped" ? "pending" : "skipped")} accessibilityLabel={`${status === "skipped" ? "Clear" : "Mark"} set ${setNumber} skipped`}><SetStatusIcon status={status === "skipped" ? "skipped" : "pending"} /></Pressable></View>}</View>{!isCoach && needsActualWeight ? <TextInput className="min-h-10 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={actualWeight} onChangeText={(value) => setActualWeightDrafts((drafts) => ({ ...drafts, [weightKey]: value }))} keyboardType="decimal-pad" placeholder={`Actual weight in ${exercise.weightUnit}`} placeholderTextColor="#688078" accessibilityLabel={`Actual weight for set ${setNumber} of ${exercise.name}`} /> : null}<View className="flex-row items-center justify-between">{setLog?.instagramVideoUrl ? <Pressable className="flex-row items-center gap-1.5" onPress={() => Linking.openURL(setLog.instagramVideoUrl!)} accessibilityLabel={`Open Instagram video for set ${setNumber}`}><Instagram size={16} color="#D74F32" /><Text className="font-serif text-sm font-bold text-signal">Instagram linked</Text><ExternalLink size={14} color="#D74F32" /></Pressable> : <Text className="font-serif text-sm text-[#688078]">No video linked</Text>}{isCoach ? null : <Pressable className="flex-row items-center gap-1.5 rounded-md bg-canvas px-3 py-2" onPress={() => setInstagramTarget({ exerciseId: exercise.id, exerciseName: exercise.name, setNumber })} accessibilityLabel={`Add Instagram link for set ${setNumber}`}><Link2 size={15} color="#17212B" /><Text className="font-serif text-sm font-bold text-ink">Instagram</Text></Pressable>}</View></View>;
+            })}</View>) : <View className="items-center border border-fog bg-paper px-5 py-10"><Text className="font-serif text-base font-bold text-ink">No exercises prescribed</Text><Text className="mt-1 text-center font-serif text-sm text-[#52675F]">{isCoach ? "Add prescriptions from Programs before this training day begins." : "Your coach has not added exercises to this day yet."}</Text></View>}
+            <View className="border border-fog bg-paper p-4"><View className="flex-row items-center gap-2"><MessageCircle size={18} color="#2E6F5E" /><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Day comments</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Notes for {selectedEntry.day.name}</Text></View></View><View className="mt-4 gap-3">{selectedDayComments.length ? selectedDayComments.map((comment) => <View key={comment.id} className={`border px-3 py-3 ${comment.authorRole === "coach" ? "border-[#2E6F5E55] bg-[#2E6F5E0D]" : "border-fog bg-canvas"}`}><View className="flex-row items-center justify-between gap-3"><Text className="font-serif text-sm font-bold text-ink">{comment.authorName}</Text><Text className="font-serif text-xs text-[#688078]">{comment.authorRole === "coach" ? "Coach" : "Athlete"}</Text></View><Text className="mt-2 font-serif text-sm leading-6 text-[#52675F]">{comment.body}</Text></View>) : <Text className="font-serif text-sm text-[#52675F]">No notes on this training day yet.</Text>}</View><View className="mt-4"><TextInput className="min-h-20 border border-fog bg-canvas p-3 font-serif text-base text-ink" value={commentDraft} onChangeText={(value) => setCommentDrafts((drafts) => ({ ...drafts, [selectedEntry.day.id]: value }))} placeholder={isCoach ? "Leave a coaching note for this day" : "Leave a note for your coach"} placeholderTextColor="#688078" multiline textAlignVertical="top" accessibilityLabel="Day comment" /><View className="mt-3 flex-row justify-end"><Pressable className="min-h-10 flex-row items-center gap-2 rounded-md bg-ink px-3 py-2 disabled:opacity-50" onPress={() => void submitComment()} disabled={!commentDraft.trim()} accessibilityLabel="Post day comment"><Send size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Post comment</Text></Pressable></View></View></View>
+          </> : <View className="items-center border border-fog bg-paper px-5 py-12"><CalendarDays size={25} color="#688078" /><Text className="mt-3 font-serif text-base font-bold text-ink">No training days in this program</Text></View>}</> : null}
+        {!isLoading && !athletePrograms.length ? <View className="items-center border border-fog bg-paper px-5 py-12"><CalendarDays size={25} color="#688078" /><Text className="mt-3 font-serif text-base font-bold text-ink">No training program available</Text><Text className="mt-1 text-center font-serif text-sm text-[#52675F]">{isCoach ? "Create a program for the selected athlete before opening logs." : "Your coach has not assigned a program yet."}</Text></View> : null}
+      </ScrollView>
+      <InstagramLinkModal visible={instagramTarget !== null} exerciseName={instagramTarget ? `${instagramTarget.exerciseName} · set ${instagramTarget.setNumber}` : ""} onClose={() => setInstagramTarget(null)} onSave={saveInstagramLink} />
+    </AppShell>
+  );
+}

@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: powerlifting-program-postgres
+    environment:
+      POSTGRES_DB: powerlifting_program
+      POSTGRES_USER: powerlifting
+      POSTGRES_PASSWORD: powerlifting
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U powerlifting -d powerlifting_program"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  postgres-data:

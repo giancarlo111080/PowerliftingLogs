@@ -1,0 +1,168 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using PowerliftingProgram.Domain.Entities;
+
+namespace PowerliftingProgram.Infrastructure.Persistence.Configurations;
+
+internal static class EntityConfigurationExtensions
+{
+    public static void ConfigureEntity<TEntity>(this EntityTypeBuilder<TEntity> builder)
+        where TEntity : Entity
+    {
+        builder.HasKey(entity => entity.Id);
+        builder.Property(entity => entity.CreatedAt).IsRequired();
+        builder.Property(entity => entity.UpdatedAt).IsRequired();
+        builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasColumnType("bytea");
+    }
+}
+
+public sealed class AthleteProfileConfiguration : IEntityTypeConfiguration<AthleteProfile>
+{
+    public void Configure(EntityTypeBuilder<AthleteProfile> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(profile => profile.ExternalUserId).HasMaxLength(128).IsRequired();
+        builder.Property(profile => profile.DisplayName).HasMaxLength(120).IsRequired();
+        builder.Property(profile => profile.CompetitionWeightClass).HasMaxLength(32).IsRequired();
+        builder.Property(profile => profile.ActiveBlockTag).HasMaxLength(80);
+        builder.Property(profile => profile.UpcomingMeetIdentifier).HasMaxLength(128);
+        builder.Property(profile => profile.BodyWeightKg).HasPrecision(6, 2);
+        builder.Property(profile => profile.SquatOneRepMaxKg).HasPrecision(6, 2);
+        builder.Property(profile => profile.BenchOneRepMaxKg).HasPrecision(6, 2);
+        builder.Property(profile => profile.DeadliftOneRepMaxKg).HasPrecision(6, 2);
+        builder.Property(profile => profile.CumulativeWorkingSetTonnageKg).HasPrecision(12, 2);
+        builder.HasIndex(profile => profile.ExternalUserId).IsUnique();
+    }
+}
+
+public sealed class TrainingBlockConfiguration : IEntityTypeConfiguration<TrainingBlock>
+{
+    public void Configure(EntityTypeBuilder<TrainingBlock> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(block => block.Tag).HasMaxLength(80).IsRequired();
+        builder.Property(block => block.Name).HasMaxLength(160).IsRequired();
+        builder.HasIndex(block => new { block.AthleteProfileId, block.Tag }).IsUnique();
+        builder.HasOne(block => block.AthleteProfile).WithMany(profile => profile.TrainingBlocks)
+            .HasForeignKey(block => block.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class TrainingWeekConfiguration : IEntityTypeConfiguration<TrainingWeek>
+{
+    public void Configure(EntityTypeBuilder<TrainingWeek> builder)
+    {
+        builder.ConfigureEntity();
+        builder.HasIndex(week => new { week.TrainingBlockId, week.WeekNumber }).IsUnique();
+        builder.HasOne(week => week.TrainingBlock).WithMany(block => block.Weeks)
+            .HasForeignKey(week => week.TrainingBlockId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class TrainingDayConfiguration : IEntityTypeConfiguration<TrainingDay>
+{
+    public void Configure(EntityTypeBuilder<TrainingDay> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(day => day.Name).HasMaxLength(160).IsRequired();
+        builder.Property(day => day.Focus).HasMaxLength(160).IsRequired();
+        builder.HasIndex(day => new { day.TrainingWeekId, day.ScheduledFor }).IsUnique();
+        builder.HasOne(day => day.TrainingWeek).WithMany(week => week.Days)
+            .HasForeignKey(day => day.TrainingWeekId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PrescribedExerciseConfiguration : IEntityTypeConfiguration<PrescribedExercise>
+{
+    public void Configure(EntityTypeBuilder<PrescribedExercise> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(exercise => exercise.Name).HasMaxLength(160).IsRequired();
+        builder.Property(exercise => exercise.ExerciseTypeModifier).HasPrecision(5, 3);
+        builder.Property(exercise => exercise.TargetEstimatedOneRepMaxKg).HasPrecision(6, 2);
+        builder.HasIndex(exercise => new { exercise.TrainingDayId, exercise.SortOrder }).IsUnique();
+        builder.HasOne(exercise => exercise.TrainingDay).WithMany(day => day.Exercises)
+            .HasForeignKey(exercise => exercise.TrainingDayId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class TrainingSetConfiguration : IEntityTypeConfiguration<TrainingSet>
+{
+    public void Configure(EntityTypeBuilder<TrainingSet> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(set => set.TargetLoadKg).HasPrecision(6, 2);
+        builder.Property(set => set.TargetRpe).HasPrecision(3, 1);
+        builder.Property(set => set.TargetEstimatedOneRepMaxKg).HasPrecision(6, 2);
+        builder.Property(set => set.ActualLoadKg).HasPrecision(6, 2);
+        builder.Property(set => set.ActualRpe).HasPrecision(3, 1);
+        builder.Property(set => set.ActualEstimatedOneRepMaxKg).HasPrecision(6, 2);
+        builder.Property(set => set.ActualEffortPercentage).HasPrecision(4, 3);
+        builder.Property(set => set.InstagramVideoUrl).HasMaxLength(2_048);
+        builder.Property(set => set.AthleteNote).HasMaxLength(2_000);
+        builder.Property(set => set.CoachFormFlags).HasMaxLength(2_000);
+        builder.HasIndex(set => new { set.PrescribedExerciseId, set.SetNumber }).IsUnique();
+        builder.HasOne(set => set.PrescribedExercise).WithMany(exercise => exercise.Sets)
+            .HasForeignKey(set => set.PrescribedExerciseId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class CommentThreadConfiguration : IEntityTypeConfiguration<CommentThread>
+{
+    public void Configure(EntityTypeBuilder<CommentThread> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(thread => thread.Subject).HasMaxLength(200).IsRequired();
+        builder.HasOne(thread => thread.AthleteProfile).WithMany(profile => profile.CommentThreads)
+            .HasForeignKey(thread => thread.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(thread => thread.TrainingDay).WithMany(day => day.CommentThreads)
+            .HasForeignKey(thread => thread.TrainingDayId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(thread => thread.PrescribedExercise).WithMany(exercise => exercise.CommentThreads)
+            .HasForeignKey(thread => thread.PrescribedExerciseId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(thread => thread.TrainingSet).WithMany(set => set.CommentThreads)
+            .HasForeignKey(thread => thread.TrainingSetId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class ThreadCommentConfiguration : IEntityTypeConfiguration<ThreadComment>
+{
+    public void Configure(EntityTypeBuilder<ThreadComment> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(comment => comment.AuthorUserId).HasMaxLength(128).IsRequired();
+        builder.Property(comment => comment.AuthorDisplayName).HasMaxLength(120).IsRequired();
+        builder.Property(comment => comment.Message).HasMaxLength(5_000).IsRequired();
+        builder.HasOne(comment => comment.CommentThread).WithMany(thread => thread.Comments)
+            .HasForeignKey(comment => comment.CommentThreadId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class SyncCommandConfiguration : IEntityTypeConfiguration<SyncCommand>
+{
+    public void Configure(EntityTypeBuilder<SyncCommand> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(command => command.CommandType).HasMaxLength(40).IsRequired();
+        builder.Property(command => command.PayloadJson).HasColumnType("jsonb").IsRequired();
+        builder.Property(command => command.DeviceId).HasMaxLength(128).IsRequired();
+        builder.Property(command => command.RejectionReason).HasMaxLength(1_000);
+        builder.HasIndex(command => command.CommandId).IsUnique();
+        builder.HasIndex(command => new { command.AthleteProfileId, command.Status });
+        builder.HasOne(command => command.AthleteProfile).WithMany().HasForeignKey(command => command.AthleteProfileId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class AthleteAchievementConfiguration : IEntityTypeConfiguration<AthleteAchievement>
+{
+    public void Configure(EntityTypeBuilder<AthleteAchievement> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(achievement => achievement.BadgeCode).HasMaxLength(80).IsRequired();
+        builder.Property(achievement => achievement.Title).HasMaxLength(160).IsRequired();
+        builder.Property(achievement => achievement.Value).HasPrecision(12, 2);
+        builder.HasIndex(achievement => new { achievement.AthleteProfileId, achievement.BadgeCode }).IsUnique();
+        builder.HasOne(achievement => achievement.AthleteProfile).WithMany(profile => profile.Achievements)
+            .HasForeignKey(achievement => achievement.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
+    }
+}

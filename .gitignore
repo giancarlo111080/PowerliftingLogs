@@ -1,0 +1,20 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+
+# Node and Expo
+client/node_modules/
+client/.expo/
+client/dist/
+client/web-build/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS and editor state
+.DS_Store
+.vscode/*.log

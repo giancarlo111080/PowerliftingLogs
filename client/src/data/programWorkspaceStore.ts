@@ -1,0 +1,657 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useEffect, useState } from "react";
+
+export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
+export type ProgramStatus = "draft" | "active" | "completed";
+export type ExerciseCategory = "squat" | "bench" | "deadlift" | "accessory";
+export type PrescriptionMode = "rpe" | "rir" | "exact";
+export type WeightUnit = "kg" | "lb";
+export type DayScheduleAuthor = "coach" | "lifter";
+export type ProgramSetCompletionStatus = "pending" | "done" | "skipped";
+
+export interface ProgramExercise {
+  id: string;
+  category: ExerciseCategory;
+  name: string;
+  sets: number;
+  repetitions: number;
+  prescriptionMode: PrescriptionMode;
+  prescriptionValue: number;
+  weightUnit: WeightUnit;
+}
+
+export interface ProgramDay {
+  id: string;
+  name: string;
+  focus: string;
+  scheduledDate: string;
+  scheduleUpdatedBy: DayScheduleAuthor;
+  scheduleUpdatedAt: string;
+  exercises: ProgramExercise[];
+}
+
+export interface ProgramWeek {
+  id: string;
+  weekNumber: number;
+  name: string;
+  days: ProgramDay[];
+}
+
+export interface ProgramComment {
+  id: string;
+  programId: string;
+  dayId: string;
+  authorProfileId: string;
+  authorName: string;
+  authorRole: "lifter" | "coach";
+  body: string;
+  createdAt: string;
+}
+
+export interface ProgramDaySetLog {
+  exerciseId: string;
+  setNumber: number;
+  completionStatus: ProgramSetCompletionStatus;
+  completedAt?: string;
+  actualWeight?: number;
+  weightUnit?: WeightUnit;
+  instagramVideoUrl?: string;
+}
+
+export interface ProgramDayLog {
+  programId: string;
+  dayId: string;
+  sets: ProgramDaySetLog[];
+  sessionRating?: number;
+  ratedAt?: string;
+  updatedAt: string;
+}
+
+export interface TrainingProgram {
+  id: string;
+  athleteId: string;
+  name: string;
+  phase: ProgramPhase;
+  goal: string;
+  startDate: string;
+  endDate: string;
+  trainingDaysPerWeek: number;
+  status: ProgramStatus;
+  updatedAt: string;
+  weeks: ProgramWeek[];
+}
+
+export type ProgramInput = Omit<TrainingProgram, "id" | "athleteId" | "updatedAt" | "weeks">;
+
+interface ProgramWorkspaceStore {
+  programs: TrainingProgram[];
+  comments: ProgramComment[];
+  dayLogs: ProgramDayLog[];
+  isLoading: boolean;
+  createProgram: (athleteId: string, input: ProgramInput) => Promise<void>;
+  updateProgram: (programId: string, input: ProgramInput) => Promise<void>;
+  deleteProgram: (programId: string) => Promise<void>;
+  addWeek: (programId: string) => Promise<void>;
+  updateWeek: (programId: string, weekId: string, name: string) => Promise<void>;
+  deleteWeek: (programId: string, weekId: string) => Promise<void>;
+  addDay: (programId: string, weekId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) => Promise<ProgramDay>;
+  updateDay: (programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) => Promise<void>;
+  deleteDay: (programId: string, weekId: string, dayId: string) => Promise<void>;
+  rescheduleDay: (programId: string, weekId: string, dayId: string, scheduledDate: string, updatedBy: DayScheduleAuthor) => Promise<void>;
+  rescheduleWeek: (programId: string, weekId: string, startDate: string, updatedBy: DayScheduleAuthor) => Promise<void>;
+  addExercise: (programId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>) => Promise<ProgramExercise>;
+  updateExercise: (programId: string, weekId: string, dayId: string, exercise: ProgramExercise) => Promise<void>;
+  deleteExercise: (programId: string, weekId: string, dayId: string, exerciseId: string) => Promise<void>;
+  logDaySet: (programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) => Promise<void>;
+  updateDaySetInstagramLink: (programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) => Promise<void>;
+  updateDayRating: (programId: string, dayId: string, sessionRating: number | null) => Promise<void>;
+  addComment: (comment: Omit<ProgramComment, "id" | "createdAt">) => Promise<void>;
+}
+
+const programStorageKey = "powerlifting-program/coach-programs";
+const commentStorageKey = "powerlifting-program/program-day-comments";
+const dayLogStorageKey = "powerlifting-program/program-day-logs";
+const workspaceListeners = new Set<() => void>();
+
+function notifyWorkspaceListeners() {
+  workspaceListeners.forEach((listener) => listener());
+}
+
+function createId(prefix: string) {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isIsoDate(value: string | undefined): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
+}
+
+function addCalendarDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function createExercise(category: ExerciseCategory, name?: string): ProgramExercise {
+  const defaults: Record<ExerciseCategory, Omit<ProgramExercise, "id" | "category" | "name">> = {
+    squat: { sets: 4, repetitions: 4, prescriptionMode: "rpe", prescriptionValue: 7, weightUnit: "kg" },
+    bench: { sets: 4, repetitions: 5, prescriptionMode: "rpe", prescriptionValue: 7, weightUnit: "kg" },
+    deadlift: { sets: 3, repetitions: 3, prescriptionMode: "rpe", prescriptionValue: 7, weightUnit: "kg" },
+    accessory: { sets: 3, repetitions: 10, prescriptionMode: "rir", prescriptionValue: 2, weightUnit: "kg" }
+  };
+  const labels: Record<ExerciseCategory, string> = {
+    squat: "Competition Squat",
+    bench: "Competition Bench Press",
+    deadlift: "Competition Deadlift",
+    accessory: "Accessory Exercise"
+  };
+  return { id: createId("exercise"), category, name: name ?? labels[category], ...defaults[category] };
+}
+
+function createDay(name: string, focus: string, exercises: ProgramExercise[] = [], scheduledDate = ""): ProgramDay {
+  return { id: createId("day"), name, focus, scheduledDate, scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString(), exercises };
+}
+
+function createWeek(weekNumber: number, name = `Week ${weekNumber}`): ProgramWeek {
+  return { id: createId("week"), weekNumber, name, days: [] };
+}
+
+function seedWeeks(days: ProgramDay[], startDate: string): ProgramWeek[] {
+  return [
+    { id: createId("week"), weekNumber: 1, name: "Week 1", days: days.map((day, index) => ({ ...day, scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(startDate, index), scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString() })) },
+    { id: createId("week"), weekNumber: 2, name: "Week 2", days: [] },
+    { id: createId("week"), weekNumber: 3, name: "Week 3", days: [] },
+    { id: createId("week"), weekNumber: 4, name: "Week 4", days: [] }
+  ];
+}
+
+const initialPrograms: TrainingProgram[] = [
+  {
+    id: "program-alex-peak",
+    athleteId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9",
+    name: "Autumn Open Peak",
+    phase: "Peak",
+    goal: "Convert strength into confident competition attempts for the Autumn Open.",
+    startDate: "2026-08-03",
+    endDate: "2026-08-30",
+    trainingDaysPerWeek: 4,
+    status: "active",
+    updatedAt: "2026-08-27T16:25:00.000Z",
+    weeks: seedWeeks([
+      createDay("Day 1", "Competition squat and bench volume", [
+        createExercise("squat", "Competition Squat"),
+        createExercise("bench", "Paused Bench Press"),
+        createExercise("accessory", "Chest-Supported Row")
+      ]),
+      createDay("Day 2", "Deadlift exposure and upper back", [
+        createExercise("deadlift", "Competition Deadlift"),
+        createExercise("accessory", "Lat Pulldown")
+      ])
+    ], "2026-08-03")
+  },
+  {
+    id: "program-jordan-strength",
+    athleteId: "4ef9844a-37de-42f6-bd31-ad587265ee90",
+    name: "Regional Qualifier Strength",
+    phase: "Strength",
+    goal: "Increase top-set confidence while managing recovery.",
+    startDate: "2026-08-17",
+    endDate: "2026-09-13",
+    trainingDaysPerWeek: 3,
+    status: "active",
+    updatedAt: "2026-08-26T18:42:00.000Z",
+    weeks: seedWeeks([createDay("Day 1", "Squat and close-grip bench", [createExercise("squat", "Low-Bar Squat"), createExercise("bench", "Close-Grip Bench Press")])], "2026-08-17")
+  },
+  {
+    id: "program-mina-hypertrophy",
+    athleteId: "270e0142-a437-44bc-9dcd-dd43676fd4b0",
+    name: "Hypertrophy Accumulation",
+    phase: "Hypertrophy",
+    goal: "Add upper-back and bench volume before the next strength block.",
+    startDate: "2026-07-27",
+    endDate: "2026-08-30",
+    trainingDaysPerWeek: 4,
+    status: "active",
+    updatedAt: "2026-08-25T19:15:00.000Z",
+    weeks: seedWeeks([createDay("Day 1", "Tempo squat and bench volume", [createExercise("squat", "Tempo Squat"), createExercise("bench", "Bench Press"), createExercise("accessory", "Chest-Supported Row")])], "2026-07-27")
+  },
+  {
+    id: "program-sam-peak",
+    athleteId: "f0be3194-989f-4a36-9c8f-9c27eaf7e3da",
+    name: "City Open Peak",
+    phase: "Peak",
+    goal: "Practice competition commands and reduce accessory fatigue.",
+    startDate: "2026-08-10",
+    endDate: "2026-09-06",
+    trainingDaysPerWeek: 4,
+    status: "active",
+    updatedAt: "2026-08-27T07:31:00.000Z",
+    weeks: seedWeeks([createDay("Day 1", "Competition lifts", [createExercise("squat"), createExercise("bench", "Spoto Press"), createExercise("deadlift")])], "2026-08-10")
+  }
+];
+
+function isProgramStatus(value: unknown): value is ProgramStatus {
+  return value === "draft" || value === "active" || value === "completed";
+}
+
+function isProgramPhase(value: unknown): value is ProgramPhase {
+  return value === "Hypertrophy" || value === "Strength" || value === "Peak" || value === "Recovery";
+}
+
+function isProgram(value: unknown): value is TrainingProgram {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<TrainingProgram>;
+  return typeof candidate.id === "string" &&
+    typeof candidate.athleteId === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.goal === "string" &&
+    typeof candidate.startDate === "string" &&
+    typeof candidate.endDate === "string" &&
+    typeof candidate.trainingDaysPerWeek === "number" &&
+    isProgramPhase(candidate.phase) &&
+    isProgramStatus(candidate.status) &&
+    typeof candidate.updatedAt === "string";
+}
+
+function categoryFromName(name: string): ExerciseCategory {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("squat")) {
+    return "squat";
+  }
+  if (normalized.includes("bench")) {
+    return "bench";
+  }
+  if (normalized.includes("deadlift")) {
+    return "deadlift";
+  }
+  return "accessory";
+}
+
+function normalizeProgram(value: unknown): TrainingProgram | null {
+  if (!isProgram(value)) {
+    return null;
+  }
+  const candidate = value as TrainingProgram & { exercises?: unknown; weeks?: unknown };
+  if (Array.isArray(candidate.weeks)) {
+    return {
+      ...candidate,
+      weeks: candidate.weeks.map((rawWeek, weekIndex) => {
+        const week = rawWeek as ProgramWeek;
+        const weekNumber = typeof week.weekNumber === "number" ? week.weekNumber : weekIndex + 1;
+        return {
+          ...week,
+          weekNumber,
+          days: Array.isArray(week.days) ? week.days.map((rawDay, dayIndex) => {
+            const day = rawDay as ProgramDay;
+            return {
+              ...day,
+              scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(candidate.startDate, ((weekNumber - 1) * 7) + dayIndex),
+              scheduleUpdatedBy: day.scheduleUpdatedBy === "lifter" ? "lifter" : "coach",
+              scheduleUpdatedAt: typeof day.scheduleUpdatedAt === "string" ? day.scheduleUpdatedAt : candidate.updatedAt
+            };
+          }) : []
+        };
+      })
+    };
+  }
+  const legacyExercises = Array.isArray(candidate.exercises) ? candidate.exercises.filter((exercise): exercise is string => typeof exercise === "string") : [];
+  return {
+    ...candidate,
+    weeks: seedWeeks([createDay("Day 1", "Primary competition lifts", legacyExercises.map((exercise) => createExercise(categoryFromName(exercise), exercise)))], candidate.startDate)
+  };
+}
+
+function isComment(value: unknown): value is ProgramComment {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<ProgramComment>;
+  return typeof candidate.id === "string" &&
+    typeof candidate.programId === "string" &&
+    typeof candidate.dayId === "string" &&
+    typeof candidate.authorProfileId === "string" &&
+    typeof candidate.authorName === "string" &&
+    (candidate.authorRole === "lifter" || candidate.authorRole === "coach") &&
+    typeof candidate.body === "string" &&
+    typeof candidate.createdAt === "string";
+}
+
+function isDayLog(value: unknown): value is ProgramDayLog {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<ProgramDayLog>;
+  return typeof candidate.programId === "string" &&
+    typeof candidate.dayId === "string" &&
+    typeof candidate.updatedAt === "string" &&
+    Array.isArray(candidate.sets) &&
+    candidate.sets.every((set) => typeof set.exerciseId === "string" &&
+      Number.isInteger(set.setNumber) &&
+      set.setNumber > 0 &&
+      (set.completionStatus === "pending" || set.completionStatus === "done" || set.completionStatus === "skipped") &&
+      (set.completedAt === undefined || typeof set.completedAt === "string") &&
+      (set.actualWeight === undefined || (typeof set.actualWeight === "number" && Number.isFinite(set.actualWeight) && set.actualWeight > 0)) &&
+      (set.weightUnit === undefined || set.weightUnit === "kg" || set.weightUnit === "lb") &&
+      (set.instagramVideoUrl === undefined || typeof set.instagramVideoUrl === "string")) &&
+    (candidate.sessionRating === undefined || (Number.isInteger(candidate.sessionRating) && candidate.sessionRating >= 1 && candidate.sessionRating <= 10)) &&
+    (candidate.ratedAt === undefined || typeof candidate.ratedAt === "string");
+}
+
+function updateProgramStructure(program: TrainingProgram, weekId: string, change: (week: ProgramWeek) => ProgramWeek): TrainingProgram {
+  return { ...program, updatedAt: new Date().toISOString(), weeks: program.weeks.map((week) => week.id === weekId ? change(week) : week) };
+}
+
+export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
+  const [programs, setPrograms] = useState<TrainingProgram[]>(initialPrograms);
+  const [comments, setComments] = useState<ProgramComment[]>([]);
+  const [dayLogs, setDayLogs] = useState<ProgramDayLog[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function restoreWorkspace() {
+      try {
+        const [storedPrograms, storedComments, storedDayLogs] = await Promise.all([
+          AsyncStorage.getItem(programStorageKey),
+          AsyncStorage.getItem(commentStorageKey),
+          AsyncStorage.getItem(dayLogStorageKey)
+        ]);
+        if (!isMounted) {
+          return;
+        }
+        if (storedPrograms) {
+          const parsedPrograms = JSON.parse(storedPrograms) as unknown;
+          if (Array.isArray(parsedPrograms)) {
+            const normalizedPrograms = parsedPrograms.map(normalizeProgram).filter((program): program is TrainingProgram => program !== null);
+            if (normalizedPrograms.length) {
+              setPrograms(normalizedPrograms);
+            }
+          }
+        }
+        if (storedComments) {
+          const parsedComments = JSON.parse(storedComments) as unknown;
+          if (Array.isArray(parsedComments) && parsedComments.every(isComment)) {
+            setComments(parsedComments);
+          }
+        }
+        if (storedDayLogs) {
+          const parsedDayLogs = JSON.parse(storedDayLogs) as unknown;
+          if (Array.isArray(parsedDayLogs) && parsedDayLogs.every(isDayLog)) {
+            setDayLogs(parsedDayLogs);
+          }
+        }
+      }
+      catch {
+      }
+      finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      }
+    }
+    void restoreWorkspace();
+    const listener = () => {
+      void restoreWorkspace();
+    };
+    workspaceListeners.add(listener);
+    return () => {
+      isMounted = false;
+      workspaceListeners.delete(listener);
+    };
+  }, []);
+
+  async function persistPrograms(nextPrograms: TrainingProgram[]) {
+    setPrograms(nextPrograms);
+    try {
+      await AsyncStorage.setItem(programStorageKey, JSON.stringify(nextPrograms));
+    }
+    catch {
+    }
+    notifyWorkspaceListeners();
+  }
+
+  async function persistComments(nextComments: ProgramComment[]) {
+    setComments(nextComments);
+    try {
+      await AsyncStorage.setItem(commentStorageKey, JSON.stringify(nextComments));
+    }
+    catch {
+    }
+    notifyWorkspaceListeners();
+  }
+
+  async function persistDayLogs(nextDayLogs: ProgramDayLog[]) {
+    setDayLogs(nextDayLogs);
+    try {
+      await AsyncStorage.setItem(dayLogStorageKey, JSON.stringify(nextDayLogs));
+    }
+    catch {
+    }
+    notifyWorkspaceListeners();
+  }
+
+  async function createProgram(athleteId: string, input: ProgramInput) {
+    const nextProgram: TrainingProgram = { ...input, id: createId("program"), athleteId, updatedAt: new Date().toISOString(), weeks: [createWeek(1)] };
+    const nextPrograms = input.status === "active"
+      ? programs.map((program) => program.athleteId === athleteId && program.status === "active" ? { ...program, status: "draft" as const } : program)
+      : programs;
+    await persistPrograms([...nextPrograms, nextProgram]);
+  }
+
+  async function updateProgram(programId: string, input: ProgramInput) {
+    const targetProgram = programs.find((program) => program.id === programId);
+    const nextPrograms = programs.map((program) => {
+      if (program.id === programId) {
+        return { ...program, ...input, updatedAt: new Date().toISOString() };
+      }
+      if (input.status === "active" && program.athleteId === targetProgram?.athleteId && program.status === "active") {
+        return { ...program, status: "draft" as const };
+      }
+      return program;
+    });
+    await persistPrograms(nextPrograms);
+  }
+
+  async function deleteProgram(programId: string) {
+    await persistPrograms(programs.filter((program) => program.id !== programId));
+    await persistComments(comments.filter((comment) => comment.programId !== programId));
+    await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId));
+  }
+
+  async function addWeek(programId: string) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? { ...program, updatedAt: new Date().toISOString(), weeks: [...program.weeks, createWeek(program.weeks.length + 1)] }
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function updateWeek(programId: string, weekId: string, name: string) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, name: name.trim() || `Week ${week.weekNumber}` }))
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function deleteWeek(programId: string, weekId: string) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? { ...program, updatedAt: new Date().toISOString(), weeks: program.weeks.filter((week) => week.id !== weekId).map((week, index) => ({ ...week, weekNumber: index + 1 })) }
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function addDay(programId: string, weekId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>): Promise<ProgramDay> {
+    const program = programs.find((candidate) => candidate.id === programId);
+    const targetWeek = program?.weeks.find((week) => week.id === weekId);
+    if (!program || !targetWeek) {
+      throw new Error("The program week is no longer available.");
+    }
+    const nextDay = createDay(
+      day.name.trim() || `Day ${targetWeek.days.length + 1}`,
+      day.focus.trim() || "Training day",
+      [],
+      isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(program.startDate, ((targetWeek.weekNumber - 1) * 7) + targetWeek.days.length)
+    );
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days, nextDay] }))
+      : program);
+    await persistPrograms(nextPrograms);
+    return nextDay;
+  }
+
+  async function updateDay(programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus, ...(isIsoDate(day.scheduledDate) ? { scheduledDate: day.scheduledDate, scheduleUpdatedBy: "coach" as const, scheduleUpdatedAt: new Date().toISOString() } : {}) } : currentDay) }))
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function deleteDay(programId: string, weekId: string, dayId: string) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.filter((day) => day.id !== dayId) }))
+      : program);
+    await persistPrograms(nextPrograms);
+    await persistComments(comments.filter((comment) => comment.dayId !== dayId));
+    await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId));
+  }
+
+  async function rescheduleDay(programId: string, weekId: string, dayId: string, scheduledDate: string, updatedBy: DayScheduleAuthor) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, scheduledDate, scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() } : day) }))
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function rescheduleWeek(programId: string, weekId: string, startDate: string, updatedBy: DayScheduleAuthor) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days].sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)).map((day, index) => ({ ...day, scheduledDate: addCalendarDays(startDate, index), scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() })) }))
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function addExercise(programId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>): Promise<ProgramExercise> {
+    const targetDay = programs.find((program) => program.id === programId)?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
+    if (!targetDay) {
+      throw new Error("The training day is no longer available.");
+    }
+    const nextExercise = { ...createExercise(category), ...input };
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: [...day.exercises, nextExercise] } : day) }))
+      : program);
+    await persistPrograms(nextPrograms);
+    return nextExercise;
+  }
+
+  async function updateExercise(programId: string, weekId: string, dayId: string, exercise: ProgramExercise) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
+      : program);
+    await persistPrograms(nextPrograms);
+  }
+
+  async function deleteExercise(programId: string, weekId: string, dayId: string, exerciseId: string) {
+    const nextPrograms = programs.map((program) => program.id === programId
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.filter((exercise) => exercise.id !== exerciseId) } : day) }))
+      : program);
+    await persistPrograms(nextPrograms);
+    await persistDayLogs(dayLogs.map((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId
+      ? { ...dayLog, sets: dayLog.sets.filter((set) => set.exerciseId !== exerciseId), updatedAt: new Date().toISOString() }
+      : dayLog).filter((dayLog) => dayLog.sets.length));
+  }
+
+  async function logDaySet(programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) {
+    const now = new Date().toISOString();
+    const exercise = programs.find((program) => program.id === programId)?.weeks.flatMap((week) => week.days).find((day) => day.id === dayId)?.exercises.find((candidate) => candidate.id === exerciseId);
+    if (completionStatus === "done" && exercise?.prescriptionMode !== "exact" && (!Number.isFinite(actualWeight) || actualWeight === undefined || actualWeight <= 0)) {
+      throw new Error("Enter the weight lifted before completing an RPE or RIR set.");
+    }
+    const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
+    const existingSets = existingDayLog?.sets ?? [];
+    const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
+    const nextSet: ProgramDaySetLog = completionStatus === "pending"
+      ? { exerciseId, setNumber, completionStatus, instagramVideoUrl: previousSet?.instagramVideoUrl }
+      : {
+        exerciseId,
+        setNumber,
+        completionStatus,
+        completedAt: now,
+        ...(completionStatus === "done" ? { actualWeight: exercise?.prescriptionMode === "exact" ? exercise.prescriptionValue : actualWeight, weightUnit: exercise?.weightUnit ?? weightUnit } : {}),
+        ...(previousSet?.instagramVideoUrl ? { instagramVideoUrl: previousSet.instagramVideoUrl } : {})
+      };
+    const nextSets = [
+      ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
+      nextSet
+    ].filter((set) => set.completionStatus !== "pending" || Boolean(set.instagramVideoUrl));
+    const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
+    const nextDayLogs = nextSets.length
+      ? [...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]
+      : otherDayLogs;
+    await persistDayLogs(nextDayLogs);
+  }
+
+  async function updateDaySetInstagramLink(programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) {
+    const now = new Date().toISOString();
+    const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
+    const existingSets = existingDayLog?.sets ?? [];
+    const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
+    const nextSets = [
+      ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
+      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl }
+    ];
+    const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
+    await persistDayLogs([...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]);
+  }
+
+  async function updateDayRating(programId: string, dayId: string, sessionRating: number | null) {
+    const now = new Date().toISOString();
+    const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
+    const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
+    if (sessionRating === null && !existingDayLog?.sets.length) {
+      await persistDayLogs(otherDayLogs);
+      return;
+    }
+    await persistDayLogs([...otherDayLogs, {
+      programId,
+      dayId,
+      sets: existingDayLog?.sets ?? [],
+      ...(sessionRating === null ? {} : { sessionRating, ratedAt: now }),
+      updatedAt: now
+    }]);
+  }
+
+  async function addComment(comment: Omit<ProgramComment, "id" | "createdAt">) {
+    await persistComments([...comments, { ...comment, id: createId("comment"), createdAt: new Date().toISOString() }]);
+  }
+
+  return {
+    programs,
+    comments,
+    dayLogs,
+    isLoading,
+    createProgram,
+    updateProgram,
+    deleteProgram,
+    addWeek,
+    updateWeek,
+    deleteWeek,
+    addDay,
+    updateDay,
+    deleteDay,
+    rescheduleDay,
+    rescheduleWeek,
+    addExercise,
+    updateExercise,
+    deleteExercise,
+    logDaySet,
+    updateDaySetInstagramLink,
+    updateDayRating,
+    addComment
+  };
+}
