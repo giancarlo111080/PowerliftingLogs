@@ -5,6 +5,7 @@ using PowerliftingProgram.Application.Contracts;
 using PowerliftingProgram.Application.Services;
 using PowerliftingProgram.Domain.Entities;
 using PowerliftingProgram.Infrastructure.Persistence;
+using PowerliftingProgram.Infrastructure.Services;
 
 namespace PowerliftingProgram.Api.Controllers;
 

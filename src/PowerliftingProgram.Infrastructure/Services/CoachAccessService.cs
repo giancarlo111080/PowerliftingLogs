@@ -10,7 +10,7 @@ public sealed class CoachAccessService(TrainingDbContext database)
     public async Task<bool> CanAccessAthleteAsync(ClaimsPrincipal principal, Guid athleteProfileId, CancellationToken cancellationToken)
     {
         var userId = CurrentUserId(principal);
-        var role = principal.FindFirstValue(ClaimTypes.Role);
+        var role = principal.FindFirst(ClaimTypes.Role)?.Value;
         if (userId is null || role is null)
         {
             return false;
@@ -41,5 +41,5 @@ public sealed class CoachAccessService(TrainingDbContext database)
             .AnyAsync(user => user.Role == PlatformRole.Athlete && user.CoachId == coachId, cancellationToken);
 
     public static Guid? CurrentUserId(ClaimsPrincipal principal) =>
-        Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) ? userId : null;
+            Guid.TryParse(principal.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var userId) ? userId : null;
 }

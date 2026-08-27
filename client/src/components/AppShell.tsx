@@ -1,9 +1,10 @@
 import { type ReactNode, useState } from "react";
 import { Modal, Pressable, Text, View, useWindowDimensions } from "react-native";
-import { BarChart3, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, LayoutDashboard, LogOut, Menu, ShieldCheck, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
+import { BarChart3, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
 import { Redirect, router, type Href, usePathname } from "expo-router";
 
 import { type PlatformRole, useSession } from "../auth/AuthSessionContext";
+import { useThemePreference } from "../theme/ThemePreferenceContext";
 
 interface NavigationItem {
   label: string;
@@ -35,6 +36,7 @@ interface SidebarProps {
 function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const { session, currentProfile, activeAthlete, profiles, logout, selectAthlete } = useSession();
+  const { theme, toggleTheme } = useThemePreference();
   const [isAthletePickerOpen, setIsAthletePickerOpen] = useState(false);
 
   if (!session || !currentProfile) {
@@ -62,7 +64,7 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
   return (
       <View className={`${isDrawer ? "h-full w-80" : "h-full w-72"} border-r-2 border-fog bg-paper px-4 py-5`}>
       <View className="mb-7 flex-row items-center gap-3 px-2">
-        <View className="h-10 w-10 items-center justify-center border border-fog bg-canvas"><Dumbbell size={20} color="#CCFF00" /></View>
+        <View className="h-10 w-10 items-center justify-center border border-fog bg-canvas"><Dumbbell size={20} color="#FF565E" /></View>
         <View>
           <Text className="font-heading text-xl uppercase text-ink">Iron Forge</Text>
           <Text className="font-mono text-[10px] uppercase text-muted">Coaching platform</Text>
@@ -70,28 +72,28 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
       </View>
 
       <View className="mb-5 flex-row items-center gap-2 border-y border-fog px-2 py-3">
-        <ShieldCheck size={15} color="#CCFF00" />
+        <ShieldCheck size={15} color="#FF565E" />
         <Text className="font-mono text-xs uppercase tracking-widest text-zinc">RBAC active</Text>
       </View>
 
       {session.role === "COACH" ? (
         <View className="mb-5">
-          <Text className="mb-2 px-2 font-serif text-xs font-bold uppercase tracking-widest text-[#688078]">Reviewing</Text>
+          <Text className="mb-2 px-2 font-serif text-xs font-bold uppercase tracking-widest text-[#8996AC]">Reviewing</Text>
           <Pressable
             className="flex-row items-center border border-fog bg-canvas px-3 py-3 active:bg-fog"
             onPress={() => setIsAthletePickerOpen((open) => !open)}
             accessibilityLabel="Choose athlete to review"
           >
             <View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{activeAthlete?.initials ?? "AM"}</Text></View>
-            <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{activeAthlete?.displayName ?? "Athlete"}</Text><Text className="font-serif text-xs text-[#52675F]">Active athlete</Text></View>
-            <ChevronDown size={16} color="#52675F" />
+            <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{activeAthlete?.displayName ?? "Athlete"}</Text><Text className="font-serif text-xs text-[#ABB5C8]">Active athlete</Text></View>
+            <ChevronDown size={16} color="#ABB5C8" />
           </Pressable>
           {isAthletePickerOpen ? (
             <View className="border-x border-b border-fog bg-paper py-1">
               {coachAthletes.map((athlete) => (
                 <Pressable key={athlete.id} className="px-3 py-2.5 active:bg-canvas" onPress={() => chooseAthlete(athlete.id)}>
                   <Text className="font-serif text-sm font-bold text-ink">{athlete.displayName}</Text>
-                  <Text className="font-serif text-xs text-[#52675F]">{athlete.activeBlock ?? "Current training block"}</Text>
+                  <Text className="font-serif text-xs text-[#ABB5C8]">{athlete.activeBlock ?? "Current training block"}</Text>
                 </Pressable>
               ))}
             </View>
@@ -109,7 +111,7 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
               onPress={() => navigate(href)}
               accessibilityLabel={`Open ${label}`}
             >
-              <Icon size={18} color={isActive ? "#FFFFFF" : "#52675F"} />
+              <Icon size={18} color={isActive ? "#FFFFFF" : "#ABB5C8"} />
               <Text className={`font-serif text-sm font-bold ${isActive ? "text-white" : "text-ink"}`}>{label}</Text>
             </Pressable>
           );
@@ -117,12 +119,16 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
       </View>
 
       <View className="border-t border-fog pt-4">
+        <Pressable className="mb-3 min-h-10 flex-row items-center gap-3 px-3 py-2 active:bg-canvas" onPress={() => void toggleTheme()} accessibilityLabel={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+          {theme === "dark" ? <Sun size={17} color="#FF565E" /> : <Moon size={17} color="#D92233" />}
+          <Text className="font-serif text-sm font-bold text-ink">{theme === "dark" ? "Light theme" : "Dark theme"}</Text>
+        </Pressable>
         <View className="mb-3 flex-row items-center px-2">
           <View className="h-9 w-9 items-center justify-center rounded-md bg-signal"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View>
-          <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{currentProfile.displayName}</Text><Text className="font-serif text-xs capitalize text-[#52675F]">{session.role}</Text></View>
+          <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{currentProfile.displayName}</Text><Text className="font-serif text-xs capitalize text-[#ABB5C8]">{session.role}</Text></View>
         </View>
         <Pressable className="min-h-10 flex-row items-center gap-3 px-3 py-2 active:bg-canvas" onPress={signOut} accessibilityLabel="Log out">
-          <LogOut size={17} color="#D32F2F" />
+          <LogOut size={17} color="#FF3B45" />
           <Text className="font-serif text-sm font-bold text-signal">Log out</Text>
         </Pressable>
       </View>
@@ -148,10 +154,10 @@ export function AppShell({ title, children }: AppShellProps) {
           <View className="flex-row items-center gap-3">
             {!isDesktop ? (
               <Pressable className="h-10 w-10 items-center justify-center border border-fog" onPress={() => setIsMenuOpen(true)} accessibilityLabel="Open navigation menu">
-                <Menu size={20} color="#F4F4ED" />
+                <Menu size={20} color="#F5F7FB" />
               </Pressable>
             ) : null}
-            <View><Text className="font-serif text-xl font-bold text-ink">{title}</Text><Text className="font-serif text-xs text-[#52675F]">{session.role === "COACH" ? "Coach workspace" : "Athlete workspace"}</Text></View>
+            <View><Text className="font-serif text-xl font-bold text-ink">{title}</Text><Text className="font-serif text-xs text-[#ABB5C8]">{session.role === "COACH" ? "Coach workspace" : "Athlete workspace"}</Text></View>
           </View>
           <View className="flex-row items-center gap-2"><View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View><Text className="hidden font-serif text-sm font-bold text-ink sm:flex">{currentProfile.displayName}</Text></View>
         </View>
@@ -162,7 +168,7 @@ export function AppShell({ title, children }: AppShellProps) {
         <View className="flex-1 flex-row bg-black/40">
           <Sidebar isDrawer onNavigate={() => setIsMenuOpen(false)} />
           <Pressable className="flex-1" onPress={() => setIsMenuOpen(false)} accessibilityLabel="Close navigation menu">
-            <View className="items-end p-4"><View className="h-10 w-10 items-center justify-center rounded-md bg-paper"><X size={20} color="#17212B" /></View></View>
+            <View className="items-end p-4"><View className="h-10 w-10 items-center justify-center rounded-md bg-paper"><X size={20} color="#F5F7FB" /></View></View>
           </Pressable>
         </View>
       </Modal>

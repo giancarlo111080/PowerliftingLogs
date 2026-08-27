@@ -72,6 +72,7 @@ export interface TrainingProgram {
   id: string;
   athleteId: string;
   coachId?: string;
+  templateId?: string;
   name: string;
   phase: ProgramPhase;
   goal: string;
@@ -600,6 +601,13 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     if (!isIsoDate(startDate)) {
       throw new Error("Choose a valid start date as YYYY-MM-DD.");
     }
+    const existingTrainingLog = programs.find((program) => program.athleteId === athleteId && program.status === "active" && (
+      program.templateId === template.id ||
+      (program.coachId === template.coachId && program.name === template.name)
+    ));
+    if (existingTrainingLog) {
+      return existingTrainingLog;
+    }
     const now = new Date().toISOString();
     const clonedWeeks = [...template.weeks].sort((left, right) => left.weekNumber - right.weekNumber).map((week) => ({
       id: createId("week"),
@@ -617,7 +625,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       }))
     }));
     const finalScheduledDate = clonedWeeks.flatMap((week) => week.days).map((day) => day.scheduledDate).sort().at(-1) ?? startDate;
-    const trainingLog: TrainingProgram = { id: createId("live-log"), athleteId, coachId: template.coachId, name: template.name, phase: template.phase, goal: template.goal, startDate, endDate: finalScheduledDate, trainingDaysPerWeek: template.trainingDaysPerWeek, status: "active", updatedAt: now, weeks: clonedWeeks };
+    const trainingLog: TrainingProgram = { id: createId("live-log"), athleteId, coachId: template.coachId, templateId: template.id, name: template.name, phase: template.phase, goal: template.goal, startDate, endDate: finalScheduledDate, trainingDaysPerWeek: template.trainingDaysPerWeek, status: "active", updatedAt: now, weeks: clonedWeeks };
     await persistPrograms([...programs.map((program) => program.athleteId === athleteId && program.status === "active" ? { ...program, status: "completed" as const } : program), trainingLog]);
     return trainingLog;
   }
@@ -637,10 +645,14 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function deleteWeek(programId: string, weekId: string) {
+    const removedDayIds = programs.find((program) => program.id === programId)?.weeks
+      .find((week) => week.id === weekId)?.days.map((day) => day.id) ?? [];
     const nextPrograms = programs.map((program) => program.id === programId
       ? { ...program, updatedAt: new Date().toISOString(), weeks: program.weeks.filter((week) => week.id !== weekId).map((week, index) => ({ ...week, weekNumber: index + 1 })) }
       : program);
     await persistPrograms(nextPrograms);
+    await persistComments(comments.filter((comment) => comment.programId !== programId || !removedDayIds.includes(comment.dayId)));
+    await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId || !removedDayIds.includes(dayLog.dayId)));
   }
 
   async function addDay(programId: string, weekId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>): Promise<ProgramDay> {
@@ -837,22 +849,29 @@ function normalizeTemplate(value: unknown): ProgramTemplate | null {
     return null;
   }
   const candidate = value as Partial<ProgramTemplate>;
-  if (typeof candidate.id !== "string" || typeof candidate.coachId !== "string" || typeof candidate.name !== "string" || !isProgramPhase(candidate.phase) || typeof candidate.goal !== "string" || !Number.isInteger(candidate.trainingDaysPerWeek) || typeof candidate.createdAt !== "string" || typeof candidate.updatedAt !== "string" || !Array.isArray(candidate.weeks)) {
+  if (typeof candidate.id !== "string" || typeof candidate.coachId !== "string" || typeof candidate.name !== "string" || !isProgramPhase(candidate.phase) || typeof candidate.goal !== "string" || typeof candidate.trainingDaysPerWeek !== "number" || !Number.isInteger(candidate.trainingDaysPerWeek) || typeof candidate.createdAt !== "string" || typeof candidate.updatedAt !== "string" || !Array.isArray(candidate.weeks)) {
     return null;
   }
   return {
-    ...candidate,
+    id: candidate.id,
+    coachId: candidate.coachId,
+    name: candidate.name,
+    phase: candidate.phase,
+    goal: candidate.goal,
+    trainingDaysPerWeek: candidate.trainingDaysPerWeek,
+    createdAt: candidate.createdAt,
+    updatedAt: candidate.updatedAt,
     weeks: candidate.weeks.map((rawWeek, weekIndex) => {
       const week = rawWeek as Partial<ProgramTemplateWeek>;
       return {
         id: typeof week.id === "string" ? week.id : createId("template-week"),
-        weekNumber: Number.isInteger(week.weekNumber) ? week.weekNumber : weekIndex + 1,
+        weekNumber: typeof week.weekNumber === "number" && Number.isInteger(week.weekNumber) ? week.weekNumber : weekIndex + 1,
         name: typeof week.name === "string" ? week.name : `Week ${weekIndex + 1}`,
         days: Array.isArray(week.days) ? week.days.map((rawDay, dayIndex) => {
           const day = rawDay as Partial<ProgramTemplateDay>;
           return {
             id: typeof day.id === "string" ? day.id : createId("template-day"),
-            sequence: Number.isInteger(day.sequence) && day.sequence > 0 ? day.sequence : dayIndex + 1,
+            sequence: typeof day.sequence === "number" && Number.isInteger(day.sequence) && day.sequence > 0 ? day.sequence : dayIndex + 1,
             name: typeof day.name === "string" ? day.name : `Day ${dayIndex + 1}`,
             focus: typeof day.focus === "string" ? day.focus : "Training day",
             exercises: Array.isArray(day.exercises) ? day.exercises as ProgramExercise[] : []

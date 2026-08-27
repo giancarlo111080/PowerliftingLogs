@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-nativ
 import { ArrowRight, CircleDot, Dumbbell, LockKeyhole, ShieldCheck, Users, X } from "lucide-react-native";
 import { router } from "expo-router";
 
-import { getInvitationContext, type PlatformRole } from "../lib/platformApi";
+import { getInvitationContext, isStaticDemo, staticDemoCredentials, type PlatformRole } from "../lib/platformApi";
 import { useSession } from "../auth/AuthSessionContext";
 
 interface AuthScreenProps {
@@ -82,6 +82,24 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScr
     }
   }
 
+  async function signInToDemo(kind: "coach" | "athlete") {
+    const credentials = staticDemoCredentials[kind];
+    setEmail(credentials.email);
+    setPassword(credentials.password);
+    setMessage(null);
+    setIsSubmitting(true);
+    try {
+      await login(credentials.email, credentials.password);
+      router.replace("/dashboard");
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not open the static demo.");
+    }
+    finally {
+      setIsSubmitting(false);
+    }
+  }
+
   const isRegistering = mode === "register";
   return (
     <View className="flex-1 bg-canvas px-5 py-8 sm:items-center sm:justify-center">
@@ -93,9 +111,10 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScr
         </View>
 
         <View className="mt-8 border border-fog bg-paper p-5">
-          <View className="flex-row border-b border-fog"><Pressable className={`flex-1 border-b-2 px-3 py-3 ${!isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("sign-in"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${!isRegistering ? "text-ink" : "text-muted"}`}>Sign in</Text></Pressable><Pressable className={`flex-1 border-b-2 px-3 py-3 ${isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("register"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${isRegistering ? "text-ink" : "text-muted"}`}>Register</Text></Pressable></View>
+          <View className="flex-row border-b border-fog"><Pressable className={`flex-1 border-b-2 px-3 py-3 ${!isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("sign-in"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${!isRegistering ? "text-ink" : "text-muted"}`}>Sign in</Text></Pressable>{!isStaticDemo ? <Pressable className={`flex-1 border-b-2 px-3 py-3 ${isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("register"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${isRegistering ? "text-ink" : "text-muted"}`}>Register</Text></Pressable> : null}</View>
 
           {inviteMessage ? <View className="mt-5 flex-row gap-3 border border-zinc bg-zinc/10 p-3"><ShieldCheck size={18} color="#CCFF00" /><Text className="flex-1 font-sans text-sm leading-5 text-ink">{inviteMessage}</Text></View> : null}
+          {isStaticDemo && !isRegistering ? <View className="mt-5 border border-fog bg-canvas p-4"><Text className="font-heading text-sm uppercase text-ink">Open the static demo</Text><Text className="mt-1 font-sans text-sm leading-5 text-muted">Choose a sample workspace. Changes stay only in this browser.</Text><View className="mt-4 flex-col gap-2 sm:flex-row"><Pressable className="min-h-11 flex-1 flex-row items-center justify-center gap-2 border border-fog bg-paper px-3 py-3 disabled:opacity-60" onPress={() => void signInToDemo("athlete")} disabled={isSubmitting} accessibilityLabel="Open athlete demo"><Dumbbell size={17} color="#F5F7FB" /><Text className="font-heading text-sm uppercase text-ink">Athlete demo</Text></Pressable><Pressable className="min-h-11 flex-1 flex-row items-center justify-center gap-2 bg-signal px-3 py-3 disabled:opacity-60" onPress={() => void signInToDemo("coach")} disabled={isSubmitting} accessibilityLabel="Open coach demo"><Users size={17} color="#FFFFFF" /><Text className="font-heading text-sm uppercase text-white">Coach demo</Text></Pressable></View></View> : null}
           {isRegistering ? <View className="mt-5 gap-2"><Text className="font-heading text-sm uppercase text-ink">Account type</Text><View className="flex-col gap-2 sm:flex-row">{(["ATHLETE", "COACH"] as PlatformRole[]).map((candidate) => { const selected = role === candidate; const Icon = candidate === "ATHLETE" ? Dumbbell : Users; return <Pressable key={candidate} className={`min-h-16 flex-1 flex-row items-center gap-3 border px-4 py-3 ${selected ? "border-signal bg-signal/10" : "border-fog bg-canvas"} ${invitationToken && candidate === "COACH" ? "opacity-40" : ""}`} onPress={() => !invitationToken && setRole(candidate)} accessibilityRole="radio" accessibilityState={{ selected }} accessibilityLabel={`Register as ${candidate.toLowerCase()}`}><CircleDot size={18} color={selected ? "#D32F2F" : "#9B9B95"} /><Icon size={18} color={selected ? "#F4F4ED" : "#9B9B95"} /><Text className={`font-heading text-sm uppercase ${selected ? "text-ink" : "text-muted"}`}>{candidate}</Text></Pressable>; })}</View></View> : null}
 
           <View className="mt-5 gap-4">

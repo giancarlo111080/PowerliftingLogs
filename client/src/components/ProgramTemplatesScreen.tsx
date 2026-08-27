@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { ArrowRight, ClipboardList, Dumbbell, Layers3, Plus, Save, Users, X } from "lucide-react-native";
 import { router } from "expo-router";
 
 import { useSession } from "../auth/AuthSessionContext";
 import { type ExerciseCategory, type ProgramExercise, type ProgramPhase, type ProgramTemplate, type ProgramTemplateInput, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
+import { DatePickerField } from "./DatePickerField";
 
 interface TemplateDraft extends ProgramTemplateInput {}
 
@@ -36,7 +37,7 @@ function prescription(exercise: ProgramExercise) {
 
 export function ProgramTemplatesScreen() {
   const { session, currentProfile, profiles, activeAthlete } = useSession();
-  const { templates, isLoading, createTemplate, updateTemplate, addTemplateWeek, updateTemplateWeek, addTemplateDay, addTemplateExercise, updateTemplateExercise, assignTemplate } = useProgramWorkspaceStore();
+  const { programs, templates, isLoading, createTemplate, updateTemplate, addTemplateWeek, updateTemplateWeek, addTemplateDay, addTemplateExercise, updateTemplateExercise, assignTemplate } = useProgramWorkspaceStore();
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [draft, setDraft] = useState<TemplateDraft>(defaultDraft());
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
@@ -44,6 +45,7 @@ export function ProgramTemplatesScreen() {
   const [exerciseEditor, setExerciseEditor] = useState<ExerciseEditor | null>(null);
   const [assignmentDate, setAssignmentDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedAthleteId, setSelectedAthleteId] = useState<string | null>(null);
+  const [isAssignmentConfirmationOpen, setIsAssignmentConfirmationOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const isCoach = session?.role === "COACH";
@@ -55,6 +57,7 @@ export function ProgramTemplatesScreen() {
   if (!session || !currentProfile || !isCoach) {
     return <AppShell title="Programs"><View className="flex-1 items-center justify-center bg-canvas px-6"><Dumbbell size={32} color="#D32F2F" /><Text className="mt-4 font-heading text-xl uppercase text-ink">Coach access required</Text><Text className="mt-2 text-center font-sans text-sm text-muted">Only coaches can build or assign master program templates.</Text></View></AppShell>;
   }
+  const coachUserId = currentProfile.userId;
 
   function openEditor(template?: ProgramTemplate) {
     setEditingTemplateId(template?.id ?? "new");
@@ -68,7 +71,7 @@ export function ProgramTemplatesScreen() {
       return;
     }
     if (editingTemplateId === "new") {
-      const created = await createTemplate(currentProfile.userId, { ...draft, name: draft.name.trim(), goal: draft.goal.trim() });
+      const created = await createTemplate(coachUserId, { ...draft, name: draft.name.trim(), goal: draft.goal.trim() });
       setSelectedTemplateId(created.id);
       setMessage("Master template created. Add weeks, days, and prescriptions before assigning it.");
     }
@@ -89,7 +92,7 @@ export function ProgramTemplatesScreen() {
     setDayDrafts((drafts) => ({ ...drafts, [weekId]: { name: "", focus: "" } }));
   }
 
-  async function assignSelectedTemplate() {
+  function assignSelectedTemplate() {
     if (!selectedTemplate || !assignmentAthleteId) {
       setMessage("Invite or select an athlete before assigning this template.");
       return;
@@ -98,9 +101,32 @@ export function ProgramTemplatesScreen() {
       setMessage("Use YYYY-MM-DD for the athlete start date.");
       return;
     }
-    const liveLog = await assignTemplate(selectedTemplate.id, assignmentAthleteId, assignmentDate);
-    setMessage(`${liveLog.name} is now a live training log for ${athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "this athlete"}.`);
-    router.push("/training");
+    const existingTrainingLog = programs.find((program) => program.athleteId === assignmentAthleteId && program.status === "active" && (
+      program.templateId === selectedTemplate.id ||
+      (program.coachId === selectedTemplate.coachId && program.name === selectedTemplate.name)
+    ));
+    if (existingTrainingLog) {
+      setMessage(`${existingTrainingLog.name} is already assigned to ${athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "this athlete"}. Open Training Log to edit it.`);
+      return;
+    }
+    setIsAssignmentConfirmationOpen(true);
+  }
+
+  async function confirmTemplateAssignment() {
+    if (!selectedTemplate || !assignmentAthleteId) {
+      setIsAssignmentConfirmationOpen(false);
+      return;
+    }
+    try {
+      const liveLog = await assignTemplate(selectedTemplate.id, assignmentAthleteId, assignmentDate);
+      setMessage(`${liveLog.name} is now a live training log for ${athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "this athlete"}.`);
+      setIsAssignmentConfirmationOpen(false);
+      router.push("/training");
+    }
+    catch (reason) {
+      setIsAssignmentConfirmationOpen(false);
+      setMessage(reason instanceof Error ? reason.message : "Could not assign this template.");
+    }
   }
 
   async function saveExercise() {
@@ -119,6 +145,16 @@ export function ProgramTemplatesScreen() {
       <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-7 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
         <View className="flex-col gap-4 border-l-4 border-signal pl-4 sm:flex-row sm:items-end sm:justify-between"><View><Text className="font-heading text-xs uppercase tracking-widest text-zinc">Coach programming</Text><Text className="mt-2 font-heading text-3xl uppercase text-ink">Master programs</Text><Text className="mt-2 font-sans text-base leading-6 text-muted">Templates are reusable. Assigning one creates a separate live log for the athlete.</Text></View><Pressable className="min-h-11 flex-row items-center justify-center gap-2 bg-signal px-4 py-3" onPress={() => openEditor()}><Plus size={18} color="#F4F4ED" /><Text className="font-heading text-sm uppercase text-white">New template</Text></Pressable></View>
         {message ? <View className="border border-zinc bg-zinc/10 px-4 py-3"><Text className="font-sans text-sm text-ink">{message}</Text></View> : null}
+        <Modal transparent animationType="fade" visible={isAssignmentConfirmationOpen} onRequestClose={() => setIsAssignmentConfirmationOpen(false)}>
+          <View className="flex-1 items-center justify-center bg-black/60 px-5">
+            <View className="w-full max-w-md border border-fog bg-paper p-5">
+              <Text className="font-heading text-xs uppercase tracking-widest text-moss">Confirm assignment</Text>
+              <Text className="mt-2 font-heading text-2xl uppercase text-ink">Assign this program?</Text>
+              <Text className="mt-3 font-sans text-sm leading-6 text-muted">{selectedTemplate?.name ?? "This template"} will become the active live training log for {athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "the selected athlete"}, starting {assignmentDate}.</Text>
+              <View className="mt-5 flex-row justify-end gap-2"><Pressable className="min-h-11 border border-fog px-4 py-3" onPress={() => setIsAssignmentConfirmationOpen(false)}><Text className="font-heading text-sm uppercase text-ink">Cancel</Text></Pressable><Pressable className="min-h-11 bg-signal px-4 py-3" onPress={() => void confirmTemplateAssignment()}><Text className="font-heading text-sm uppercase text-white">Assign program</Text></Pressable></View>
+            </View>
+          </View>
+        </Modal>
         {isLoading ? <View className="items-center py-14"><ActivityIndicator color="#CCFF00" /></View> : null}
 
         {editingTemplateId ? <View className="border border-fog bg-paper p-5"><View className="flex-row items-center justify-between"><Text className="font-heading text-xl uppercase text-ink">{editingTemplateId === "new" ? "New master" : "Edit master"}</Text><Pressable className="h-10 w-10 items-center justify-center border border-fog" onPress={() => setEditingTemplateId(null)} accessibilityLabel="Close template editor"><X size={18} color="#F4F4ED" /></Pressable></View><View className="mt-5 gap-4"><Field label="Template name" value={draft.name} onChangeText={(name) => setDraft((current) => ({ ...current, name }))} placeholder="12-week peaking block" /><Field label="Coaching goal" value={draft.goal} onChangeText={(goal) => setDraft((current) => ({ ...current, goal }))} placeholder="Build meet-day confidence" /><View className="flex-col gap-4 sm:flex-row"><View className="flex-1"><Field label="Training days per week" value={draft.trainingDaysPerWeek.toString()} onChangeText={(value) => setDraft((current) => ({ ...current, trainingDaysPerWeek: Number(value) || 0 }))} placeholder="4" keyboardType="number-pad" /></View><View className="flex-1"><Text className="mb-1.5 font-heading text-xs uppercase text-muted">Phase</Text><View className="flex-row flex-wrap gap-2">{phases.map((phase) => <Pressable key={phase} className={`border px-3 py-2 ${draft.phase === phase ? "border-signal bg-signal/10" : "border-fog bg-canvas"}`} onPress={() => setDraft((current) => ({ ...current, phase }))}><Text className={`font-heading text-xs uppercase ${draft.phase === phase ? "text-ink" : "text-muted"}`}>{phase}</Text></Pressable>)}</View></View></View></View><Pressable className="mt-5 min-h-11 flex-row items-center justify-center gap-2 bg-signal px-4 py-3" onPress={() => void saveTemplate()}><Save size={17} color="#F4F4ED" /><Text className="font-heading text-sm uppercase text-white">Save master</Text></Pressable></View> : null}
@@ -136,6 +172,9 @@ export function ProgramTemplatesScreen() {
 }
 
 function Field({ label, value, onChangeText, placeholder, keyboardType = "default" }: { label: string; value: string; onChangeText: (value: string) => void; placeholder: string; keyboardType?: "default" | "number-pad" }) {
+  if (label.toLowerCase().includes("date")) {
+    return <DatePickerField label={label} value={value} onChangeText={onChangeText} />;
+  }
   return <View><Text className="mb-1.5 font-heading text-xs uppercase text-muted">{label}</Text><TextInput className="min-h-11 border border-fog bg-canvas px-3 font-sans text-base text-ink" value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9B9B95" keyboardType={keyboardType} accessibilityLabel={label} /></View>;
 }
 

@@ -50,9 +50,9 @@ public sealed class JwtTokenService(IConfiguration configuration)
     {
         var jwt = configuration.GetSection("Authentication:Jwt");
         var signingKey = jwt["SigningKey"] ?? throw new InvalidOperationException("Authentication:Jwt:SigningKey is required.");
-        if (signingKey.Length < 32)
+        if (Encoding.UTF8.GetByteCount(signingKey) < 64)
         {
-            throw new InvalidOperationException("Authentication:Jwt:SigningKey must be at least 32 characters.");
+            throw new InvalidOperationException("Authentication:Jwt:SigningKey must be at least 64 bytes for HS512.");
         }
 
         var expiresInHours = jwt.GetValue<int?>("ExpiresInHours") ?? 12;

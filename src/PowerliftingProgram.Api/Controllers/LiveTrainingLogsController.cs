@@ -92,5 +92,5 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
                         set.CompletionStatus,
                         set.ActualLoadKg,
                         set.ActualRepetitions,
-                        set.ActualRpe)).ToList())).ToList())).ToList()));
+                        set.ActualRpe)).ToList())).ToList())).ToList())).ToList());
 }

@@ -257,3 +257,8 @@ For a real deployment, host the API container on an ASP.NET-compatible service a
 #   P o w e r l i f t i n g P r o g r a m 
  
  
+gee javier athlete giancarlomallarejavier22@gmail.com
+1234567!@#$%
+
+giancarlo javier coach giancarlojavier22@gmail.com
+imthecoach

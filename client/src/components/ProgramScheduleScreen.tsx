@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { CalendarDays, ChevronRight, RotateCcw, Save } from "lucide-react-native";
 
 import { useProxySession } from "../auth/ProxySessionContext";
 import { type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
+import { DatePickerField } from "./DatePickerField";
 
 function isValidIsoDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -18,20 +19,7 @@ function formatDate(value: string) {
 }
 
 function DateField({ label, value, onChangeText }: { label: string; value: string; onChangeText: (value: string) => void }) {
-  return (
-    <View className="flex-1 gap-1.5">
-      <Text className="font-serif text-xs font-bold uppercase tracking-widest text-[#688078]">{label}</Text>
-      <TextInput
-        className="min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink"
-        value={value}
-        onChangeText={onChangeText}
-        placeholder="YYYY-MM-DD"
-        placeholderTextColor="#688078"
-        autoCapitalize="none"
-        accessibilityLabel={label}
-      />
-    </View>
-  );
+  return <DatePickerField label={label} value={value} onChangeText={onChangeText} />;
 }
 
 export function ProgramScheduleScreen() {
@@ -55,6 +43,7 @@ export function ProgramScheduleScreen() {
   if (!session || !currentProfile || !athlete) {
     return <AppShell title="Program Schedule"><View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /></View></AppShell>;
   }
+  const actorRole = session.role;
 
   async function saveDayDate(program: TrainingProgram, weekId: string, dayId: string, existingDate: string) {
     const scheduledDate = dayDates[dayId] ?? existingDate;
@@ -62,7 +51,7 @@ export function ProgramScheduleScreen() {
       setMessage("Enter a real date as YYYY-MM-DD.");
       return;
     }
-    await rescheduleDay(program.id, weekId, dayId, scheduledDate, session.role);
+    await rescheduleDay(program.id, weekId, dayId, scheduledDate, actorRole);
     setDayDates((dates) => ({ ...dates, [dayId]: scheduledDate }));
     setMessage(`Workout moved to ${formatDate(scheduledDate)}.`);
   }
@@ -73,7 +62,7 @@ export function ProgramScheduleScreen() {
       setMessage("Enter a real week start as YYYY-MM-DD.");
       return;
     }
-    await rescheduleWeek(program.id, weekId, startDate, session.role);
+    await rescheduleWeek(program.id, weekId, startDate, actorRole);
     const scheduledDayIds = program.weeks.find((week) => week.id === weekId)?.days.map((day) => day.id) ?? [];
     setDayDates((dates) => Object.fromEntries(Object.entries(dates).filter(([dayId]) => !scheduledDayIds.includes(dayId))));
     setWeekStartDates((dates) => ({ ...dates, [weekId]: startDate }));

@@ -179,6 +179,10 @@ export function ProgramWorkspaceScreen() {
   if (!session || !currentProfile || !athlete) {
     return <AppShell title="Program"><View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /></View></AppShell>;
   }
+  const athleteId = athlete.id;
+  const commentAuthorProfileId = currentProfile.id;
+  const commentAuthorName = currentProfile.displayName;
+  const commentAuthorRole = session.role;
 
   function openProgramEditor(program?: TrainingProgram) {
     setProgramEditorId(program?.id ?? "new");
@@ -223,7 +227,7 @@ export function ProgramWorkspaceScreen() {
       return;
     }
     if (programEditorId === "new") {
-      await createProgram(athlete.id, input);
+      await createProgram(athleteId, input);
     }
     else if (programEditorId) {
       await updateProgram(programEditorId, input);
@@ -295,9 +299,9 @@ export function ProgramWorkspaceScreen() {
     await addComment({
       programId,
       dayId,
-      authorProfileId: currentProfile.id,
-      authorName: currentProfile.displayName,
-      authorRole: session.role,
+      authorProfileId: commentAuthorProfileId,
+      authorName: commentAuthorName,
+      authorRole: commentAuthorRole,
       body
     });
     setCommentDrafts((drafts) => ({ ...drafts, [dayId]: "" }));

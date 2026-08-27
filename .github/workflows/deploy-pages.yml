@@ -40,7 +40,8 @@ jobs:
         working-directory: client
         env:
           EXPO_NO_TELEMETRY: "1"
-          EXPO_PUBLIC_STATIC_DEMO: "true"
+          EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_STATIC_DEMO: ${{ vars.EXPO_PUBLIC_API_URL == '' && 'true' || 'false' }}
         run: npx expo export --platform web --output-dir dist --base-url "/${{ github.event.repository.name }}"
 
       - name: Upload GitHub Pages artifact

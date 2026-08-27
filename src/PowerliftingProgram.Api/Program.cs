@@ -9,6 +9,7 @@ using PowerliftingProgram.Application.Services;
 using PowerliftingProgram.Application.Validators;
 using PowerliftingProgram.Infrastructure;
 using PowerliftingProgram.Infrastructure.Persistence;
+using PowerliftingProgram.Infrastructure.Services;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);

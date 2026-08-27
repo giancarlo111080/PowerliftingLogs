@@ -5,6 +5,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
 import { AuthSessionProvider } from "../src/auth/AuthSessionContext";
+import { ThemePreferenceProvider, useThemePreference } from "../src/theme/ThemePreferenceContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -12,13 +13,22 @@ const queryClient = new QueryClient({
   }
 });
 
+function ApplicationLayout() {
+  const { theme } = useThemePreference();
+  return (
+    <QueryClientProvider client={queryClient}>
+      <StatusBar style={theme === "dark" ? "light" : "dark"} />
+      <Stack screenOptions={{ headerShown: false }} />
+    </QueryClientProvider>
+  );
+}
+
 export default function RootLayout() {
   return (
     <AuthSessionProvider>
-      <QueryClientProvider client={queryClient}>
-        <StatusBar style="light" />
-        <Stack screenOptions={{ headerShown: false }} />
-      </QueryClientProvider>
+      <ThemePreferenceProvider>
+        <ApplicationLayout />
+      </ThemePreferenceProvider>
     </AuthSessionProvider>
   );
 }

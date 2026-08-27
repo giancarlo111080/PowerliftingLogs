@@ -5,27 +5,28 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        ink: "#F4F4ED",
-        canvas: "#121212",
-        paper: "#1B1B1B",
-        signal: "#D32F2F",
-        moss: "#CCFF00",
-        straw: "#F3B700",
-        fog: "#393939",
-        zinc: "#CCFF00",
-        muted: "#B7B7AF",
-        steel: "#080808"
+        ink: "rgb(var(--if-ink) / <alpha-value>)",
+        canvas: "rgb(var(--if-canvas) / <alpha-value>)",
+        paper: "rgb(var(--if-paper) / <alpha-value>)",
+        signal: "rgb(var(--if-signal) / <alpha-value>)",
+        moss: "rgb(var(--if-moss) / <alpha-value>)",
+        straw: "rgb(var(--if-straw) / <alpha-value>)",
+        fog: "rgb(var(--if-fog) / <alpha-value>)",
+        zinc: "rgb(var(--if-zinc) / <alpha-value>)",
+        muted: "rgb(var(--if-muted) / <alpha-value>)",
+        steel: "rgb(var(--if-steel) / <alpha-value>)"
       },
       fontFamily: {
-        heading: ["Impact", "Arial Black", "sans-serif"],
-        sans: ["Trebuchet MS", "Verdana", "sans-serif"],
-        mono: ["Consolas", "Courier New", "monospace"]
+        heading: ["Barlow Condensed", "Arial Narrow", "Segoe UI", "sans-serif"],
+        sans: ["Nunito", "Aptos", "Segoe UI", "sans-serif"],
+        serif: ["Nunito", "Aptos", "Segoe UI", "sans-serif"],
+        mono: ["Roboto Mono", "Cascadia Mono", "Consolas", "monospace"]
       }
     }
   },
   plugins: [
     ({ addUtilities }) => addUtilities({
-      ".bg-ink": { backgroundColor: "#080808" }
+      ".bg-ink": { backgroundColor: "rgb(var(--if-steel) / 1)" }
     })
   ]
 };
