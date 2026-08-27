@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from "react-native";
-import { Activity, ArrowRight, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList, Dumbbell, Flame, Gauge, Instagram, Play, RefreshCcw, Trophy, Users } from "lucide-react-native";
+import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Activity, ArrowRight, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList, Dumbbell, Flame, Gauge, Instagram, Link2, Play, RefreshCcw, Send, Trophy, Users } from "lucide-react-native";
 import { router } from "expo-router";
 
-import { useProxySession } from "../auth/ProxySessionContext";
+import { useSession } from "../auth/AuthSessionContext";
 import { achievements, coachReviewItems, formatTonnage, getCoachInsights, getWorkoutProgress } from "../data/dashboardData";
 import { useSyncWorkout } from "../hooks/useSyncWorkout";
+import { createAthleteInvitation } from "../lib/platformApi";
 import { AppShell } from "./AppShell";
 
 function ProgressBar({ value, color = "#2E6F5E" }: { value: number; color?: string }) {
@@ -105,12 +106,32 @@ function LifterDashboard() {
 }
 
 function CoachDashboard() {
-  const { profiles, activeAthlete } = useProxySession();
+  const { session, profiles, activeAthlete } = useSession();
   const [completedReviewIds, setCompletedReviewIds] = useState<string[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteMessage, setInviteMessage] = useState<string | null>(null);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
   const insights = getCoachInsights(profiles);
   const selectedInsight = insights.find((insight) => insight.athleteId === activeAthlete?.id);
   const pendingReviews = coachReviewItems.filter((item) => !completedReviewIds.includes(item.id));
   const attentionItems = insights.filter((insight) => insight.attention !== "On track");
+
+  async function sendInvite() {
+    if (!session || !inviteEmail.trim()) {
+      setInviteMessage("Enter an athlete email address.");
+      return;
+    }
+    try {
+      const invitation = await createAthleteInvitation(session.accessToken, inviteEmail.trim());
+      setInviteEmail("");
+      setInviteLink(invitation.registrationUrl);
+      setInviteMessage(`Invitation sent. It expires ${new Date(invitation.expiresAt).toLocaleString()}.`);
+    }
+    catch (reason) {
+      setInviteLink(null);
+      setInviteMessage(reason instanceof Error ? reason.message : "Could not send the athlete invitation.");
+    }
+  }
 
   return (
     <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-7 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
@@ -125,11 +146,13 @@ function CoachDashboard() {
         <Metric label="Reviews complete" value={`${coachReviewItems.length - pendingReviews.length}/${coachReviewItems.length}`} detail="Current review queue" accent="#17212B" />
       </View>
 
+      <View className="border border-zinc bg-zinc/10 p-5"><View className="flex-row items-center gap-3"><Send size={20} color="#CCFF00" /><View><Text className="font-heading text-lg uppercase text-ink">Generate athlete invite</Text><Text className="mt-1 font-sans text-sm text-muted">Iron Forge emails a secure registration link that expires after 48 hours.</Text></View></View><View className="mt-4 flex-col gap-3 sm:flex-row"><TextInput className="min-h-12 flex-1 border border-fog bg-canvas px-3 font-sans text-base text-ink" value={inviteEmail} onChangeText={setInviteEmail} placeholder="athlete@email.com" placeholderTextColor="#9B9B95" keyboardType="email-address" autoCapitalize="none" accessibilityLabel="Athlete email address" /><Pressable className="min-h-12 flex-row items-center justify-center gap-2 bg-signal px-4 py-3" onPress={() => void sendInvite()}><Send size={17} color="#F4F4ED" /><Text className="font-heading text-sm uppercase text-white">Send invite</Text></Pressable></View>{inviteMessage ? <Text className="mt-3 font-sans text-sm text-ink">{inviteMessage}</Text> : null}{inviteLink ? <View className="mt-3 flex-row items-center gap-2 border border-fog bg-canvas p-3"><Link2 size={16} color="#CCFF00" /><Text selectable className="flex-1 font-mono text-xs text-muted">{inviteLink}</Text></View> : null}</View>
+
       <View className="flex-col gap-5 lg:flex-row">
         <View className="flex-[1.35]">
           <SectionHeading eyebrow="Roster" title="Training status" action={{ label: "All athletes", onPress: () => router.push("/athletes") }} />
           <View className="border border-fog bg-paper">
-            {profiles.filter((profile) => profile.role === "lifter").map((athlete, index) => {
+            {profiles.filter((profile) => profile.role === "ATHLETE").map((athlete, index) => {
               const insight = insights.find((candidate) => candidate.athleteId === athlete.id);
               return <Pressable key={athlete.id} className={`flex-col gap-3 px-4 py-4 active:bg-canvas sm:flex-row sm:items-center ${index ? "border-t border-fog" : ""}`} onPress={() => router.push("/athletes")} accessibilityLabel={`Open ${athlete.displayName}'s athlete overview`}><View className="flex-row items-center gap-3 sm:w-48"><View className="h-9 w-9 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{athlete.initials}</Text></View><View><Text className="font-serif text-sm font-bold text-ink">{athlete.displayName}</Text><Text className="font-serif text-xs text-[#52675F]">{athlete.activeBlock}</Text></View></View><View className="flex-row flex-1 justify-between gap-3"><View><Text className="font-serif text-xs text-[#688078]">Readiness</Text><Text className="font-serif text-sm font-bold text-ink">{insight?.readiness ?? "-"}</Text></View><View><Text className="font-serif text-xs text-[#688078]">Adherence</Text><Text className="font-serif text-sm font-bold text-ink">{insight?.adherencePercent ?? "-"}%</Text></View><View><Text className="font-serif text-xs text-[#688078]">Last session</Text><Text className="font-serif text-sm font-bold text-ink">{insight?.lastSession ?? "-"}</Text></View></View><Text className={`font-serif text-xs font-bold ${insight?.attention === "On track" ? "text-moss" : "text-signal"}`}>{insight?.attention}</Text></Pressable>;
             })}
@@ -175,7 +198,7 @@ function CoachDashboard() {
 }
 
 export function DashboardScreen() {
-  const { session } = useProxySession();
+  const { session } = useSession();
 
-  return <AppShell title="Dashboard">{session?.role === "coach" ? <CoachDashboard /> : <LifterDashboard />}</AppShell>;
+  return <AppShell title="Dashboard">{session?.role === "COACH" ? <CoachDashboard /> : <LifterDashboard />}</AppShell>;
 }

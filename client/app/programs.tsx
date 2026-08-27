@@ -1,14 +1,14 @@
 import { Redirect } from "expo-router";
 
-import { useProxySession } from "../src/auth/ProxySessionContext";
-import { ProgramWorkspaceScreen } from "../src/components/ProgramWorkspaceScreen";
+import { useSession } from "../src/auth/AuthSessionContext";
+import { ProgramTemplatesScreen } from "../src/components/ProgramTemplatesScreen";
 
 export default function ProgramsRoute() {
-  const { session } = useProxySession();
+  const { session } = useSession();
 
-  if (session?.role === "lifter") {
+  if (session?.role === "ATHLETE") {
     return <Redirect href="/training" />;
   }
 
-  return <ProgramWorkspaceScreen />;
+  return <ProgramTemplatesScreen />;
 }

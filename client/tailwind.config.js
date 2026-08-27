@@ -5,15 +5,27 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        ink: "#17212B",
-        canvas: "#F3F6F4",
-        paper: "#FFFFFF",
-        signal: "#D74F32",
-        moss: "#2E6F5E",
-        straw: "#E9C46A",
-        fog: "#DDE5E1"
+        ink: "#F4F4ED",
+        canvas: "#121212",
+        paper: "#1B1B1B",
+        signal: "#D32F2F",
+        moss: "#CCFF00",
+        straw: "#F3B700",
+        fog: "#393939",
+        zinc: "#CCFF00",
+        muted: "#B7B7AF",
+        steel: "#080808"
+      },
+      fontFamily: {
+        heading: ["Impact", "Arial Black", "sans-serif"],
+        sans: ["Trebuchet MS", "Verdana", "sans-serif"],
+        mono: ["Consolas", "Courier New", "monospace"]
       }
     }
   },
-  plugins: []
+  plugins: [
+    ({ addUtilities }) => addUtilities({
+      ".bg-ink": { backgroundColor: "#080808" }
+    })
+  ]
 };

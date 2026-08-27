@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
-import { ProxySessionProvider } from "../src/auth/ProxySessionContext";
+import { AuthSessionProvider } from "../src/auth/AuthSessionContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,11 +14,11 @@ const queryClient = new QueryClient({
 
 export default function RootLayout() {
   return (
-    <ProxySessionProvider>
+    <AuthSessionProvider>
       <QueryClientProvider client={queryClient}>
-        <StatusBar style="dark" />
+        <StatusBar style="light" />
         <Stack screenOptions={{ headerShown: false }} />
       </QueryClientProvider>
-    </ProxySessionProvider>
+    </AuthSessionProvider>
   );
 }

@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 :root {
-  background: #F3F6F4;
+  background: #121212;
+  color: #F4F4ED;
 }
 
 html,
@@ -14,5 +15,12 @@ body,
 }
 
 body {
-  font-family: Georgia, "Times New Roman", serif;
+  background-color: #121212;
+  background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.018) 0, rgba(255, 255, 255, 0.018) 1px, transparent 1px, transparent 7px);
+  color: #F4F4ED;
+  font-family: "Trebuchet MS", Verdana, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
 }

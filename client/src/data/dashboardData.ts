@@ -1,4 +1,4 @@
-import type { ProxyProfile } from "../auth/ProxySessionContext";
+import type { PlatformProfile } from "../auth/AuthSessionContext";
 import type { WorkoutSnapshot } from "../types/training";
 
 export interface WorkoutProgress {
@@ -119,9 +119,9 @@ export function getWorkoutProgress(workout: WorkoutSnapshot): WorkoutProgress {
   };
 }
 
-export function getCoachInsights(profiles: ProxyProfile[]): CoachAthleteInsight[] {
+export function getCoachInsights(profiles: PlatformProfile[]): CoachAthleteInsight[] {
   return profiles
-    .filter((profile) => profile.role === "lifter")
+    .filter((profile) => profile.role === "ATHLETE")
     .map((profile) => ({
       athleteId: profile.id,
       ...insightByAthleteId[profile.id]

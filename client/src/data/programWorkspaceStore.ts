@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
 export type ProgramStatus = "draft" | "active" | "completed";
 export type ExerciseCategory = "squat" | "bench" | "deadlift" | "accessory";
-export type PrescriptionMode = "rpe" | "rir" | "exact";
+export type PrescriptionMode = "rpe" | "rir" | "percent" | "exact";
 export type WeightUnit = "kg" | "lb";
 export type DayScheduleAuthor = "coach" | "lifter";
 export type ProgramSetCompletionStatus = "pending" | "done" | "skipped";
@@ -22,6 +22,7 @@ export interface ProgramExercise {
 
 export interface ProgramDay {
   id: string;
+  sequence: number;
   name: string;
   focus: string;
   scheduledDate: string;
@@ -70,6 +71,7 @@ export interface ProgramDayLog {
 export interface TrainingProgram {
   id: string;
   athleteId: string;
+  coachId?: string;
   name: string;
   phase: ProgramPhase;
   goal: string;
@@ -83,14 +85,54 @@ export interface TrainingProgram {
 
 export type ProgramInput = Omit<TrainingProgram, "id" | "athleteId" | "updatedAt" | "weeks">;
 
+export interface ProgramTemplateDay {
+  id: string;
+  sequence: number;
+  name: string;
+  focus: string;
+  exercises: ProgramExercise[];
+}
+
+export interface ProgramTemplateWeek {
+  id: string;
+  weekNumber: number;
+  name: string;
+  days: ProgramTemplateDay[];
+}
+
+export interface ProgramTemplate {
+  id: string;
+  coachId: string;
+  name: string;
+  phase: ProgramPhase;
+  goal: string;
+  trainingDaysPerWeek: number;
+  createdAt: string;
+  updatedAt: string;
+  weeks: ProgramTemplateWeek[];
+}
+
+export type ProgramTemplateInput = Pick<ProgramTemplate, "name" | "phase" | "goal" | "trainingDaysPerWeek">;
+
 interface ProgramWorkspaceStore {
   programs: TrainingProgram[];
+  templates: ProgramTemplate[];
   comments: ProgramComment[];
   dayLogs: ProgramDayLog[];
   isLoading: boolean;
   createProgram: (athleteId: string, input: ProgramInput) => Promise<void>;
   updateProgram: (programId: string, input: ProgramInput) => Promise<void>;
   deleteProgram: (programId: string) => Promise<void>;
+  createTemplate: (coachId: string, input: ProgramTemplateInput) => Promise<ProgramTemplate>;
+  updateTemplate: (templateId: string, input: ProgramTemplateInput) => Promise<void>;
+  deleteTemplate: (templateId: string) => Promise<void>;
+  addTemplateWeek: (templateId: string) => Promise<void>;
+  updateTemplateWeek: (templateId: string, weekId: string, name: string) => Promise<void>;
+  addTemplateDay: (templateId: string, weekId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<ProgramTemplateDay>;
+  updateTemplateDay: (templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<void>;
+  addTemplateExercise: (templateId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>) => Promise<ProgramExercise>;
+  updateTemplateExercise: (templateId: string, weekId: string, dayId: string, exercise: ProgramExercise) => Promise<void>;
+  assignTemplate: (templateId: string, athleteId: string, startDate: string) => Promise<TrainingProgram>;
   addWeek: (programId: string) => Promise<void>;
   updateWeek: (programId: string, weekId: string, name: string) => Promise<void>;
   deleteWeek: (programId: string, weekId: string) => Promise<void>;
@@ -109,6 +151,7 @@ interface ProgramWorkspaceStore {
 }
 
 const programStorageKey = "powerlifting-program/coach-programs";
+const templateStorageKey = "iron-forge/program-templates";
 const commentStorageKey = "powerlifting-program/program-day-comments";
 const dayLogStorageKey = "powerlifting-program/program-day-logs";
 const workspaceListeners = new Set<() => void>();
@@ -154,8 +197,8 @@ function createExercise(category: ExerciseCategory, name?: string): ProgramExerc
   return { id: createId("exercise"), category, name: name ?? labels[category], ...defaults[category] };
 }
 
-function createDay(name: string, focus: string, exercises: ProgramExercise[] = [], scheduledDate = ""): ProgramDay {
-  return { id: createId("day"), name, focus, scheduledDate, scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString(), exercises };
+function createDay(name: string, focus: string, exercises: ProgramExercise[] = [], scheduledDate = "", sequence = 0): ProgramDay {
+  return { id: createId("day"), sequence, name, focus, scheduledDate, scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString(), exercises };
 }
 
 function createWeek(weekNumber: number, name = `Week ${weekNumber}`): ProgramWeek {
@@ -164,7 +207,7 @@ function createWeek(weekNumber: number, name = `Week ${weekNumber}`): ProgramWee
 
 function seedWeeks(days: ProgramDay[], startDate: string): ProgramWeek[] {
   return [
-    { id: createId("week"), weekNumber: 1, name: "Week 1", days: days.map((day, index) => ({ ...day, scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(startDate, index), scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString() })) },
+    { id: createId("week"), weekNumber: 1, name: "Week 1", days: days.map((day, index) => ({ ...day, sequence: index + 1, scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(startDate, index), scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString() })) },
     { id: createId("week"), weekNumber: 2, name: "Week 2", days: [] },
     { id: createId("week"), weekNumber: 3, name: "Week 3", days: [] },
     { id: createId("week"), weekNumber: 4, name: "Week 4", days: [] }
@@ -293,6 +336,7 @@ function normalizeProgram(value: unknown): TrainingProgram | null {
             const day = rawDay as ProgramDay;
             return {
               ...day,
+              sequence: Number.isInteger(day.sequence) && day.sequence > 0 ? day.sequence : dayIndex + 1,
               scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(candidate.startDate, ((weekNumber - 1) * 7) + dayIndex),
               scheduleUpdatedBy: day.scheduleUpdatedBy === "lifter" ? "lifter" : "coach",
               scheduleUpdatedAt: typeof day.scheduleUpdatedAt === "string" ? day.scheduleUpdatedAt : candidate.updatedAt
@@ -351,6 +395,7 @@ function updateProgramStructure(program: TrainingProgram, weekId: string, change
 
 export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   const [programs, setPrograms] = useState<TrainingProgram[]>(initialPrograms);
+  const [templates, setTemplates] = useState<ProgramTemplate[]>([]);
   const [comments, setComments] = useState<ProgramComment[]>([]);
   const [dayLogs, setDayLogs] = useState<ProgramDayLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -359,8 +404,9 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     let isMounted = true;
     async function restoreWorkspace() {
       try {
-        const [storedPrograms, storedComments, storedDayLogs] = await Promise.all([
+        const [storedPrograms, storedTemplates, storedComments, storedDayLogs] = await Promise.all([
           AsyncStorage.getItem(programStorageKey),
+          AsyncStorage.getItem(templateStorageKey),
           AsyncStorage.getItem(commentStorageKey),
           AsyncStorage.getItem(dayLogStorageKey)
         ]);
@@ -374,6 +420,12 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
             if (normalizedPrograms.length) {
               setPrograms(normalizedPrograms);
             }
+          }
+        }
+        if (storedTemplates) {
+          const parsedTemplates = JSON.parse(storedTemplates) as unknown;
+          if (Array.isArray(parsedTemplates)) {
+            setTemplates(parsedTemplates.map(normalizeTemplate).filter((template): template is ProgramTemplate => template !== null));
           }
         }
         if (storedComments) {
@@ -412,6 +464,16 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     setPrograms(nextPrograms);
     try {
       await AsyncStorage.setItem(programStorageKey, JSON.stringify(nextPrograms));
+    }
+    catch {
+    }
+    notifyWorkspaceListeners();
+  }
+
+  async function persistTemplates(nextTemplates: ProgramTemplate[]) {
+    setTemplates(nextTemplates);
+    try {
+      await AsyncStorage.setItem(templateStorageKey, JSON.stringify(nextTemplates));
     }
     catch {
     }
@@ -466,6 +528,100 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId));
   }
 
+  async function createTemplate(coachId: string, input: ProgramTemplateInput): Promise<ProgramTemplate> {
+    const now = new Date().toISOString();
+    const template: ProgramTemplate = { ...input, id: createId("template"), coachId, createdAt: now, updatedAt: now, weeks: [createTemplateWeek(1)] };
+    await persistTemplates([...templates, template]);
+    return template;
+  }
+
+  async function updateTemplate(templateId: string, input: ProgramTemplateInput) {
+    await persistTemplates(templates.map((template) => template.id === templateId ? { ...template, ...input, updatedAt: new Date().toISOString() } : template));
+  }
+
+  async function deleteTemplate(templateId: string) {
+    await persistTemplates(templates.filter((template) => template.id !== templateId));
+  }
+
+  async function addTemplateWeek(templateId: string) {
+    await persistTemplates(templates.map((template) => template.id === templateId
+      ? { ...template, updatedAt: new Date().toISOString(), weeks: [...template.weeks, createTemplateWeek(template.weeks.length + 1)] }
+      : template));
+  }
+
+  async function updateTemplateWeek(templateId: string, weekId: string, name: string) {
+    await persistTemplates(templates.map((template) => template.id === templateId
+      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, name: name.trim() || `Week ${week.weekNumber}` }))
+      : template));
+  }
+
+  async function addTemplateDay(templateId: string, weekId: string, day: Pick<ProgramTemplateDay, "name" | "focus">): Promise<ProgramTemplateDay> {
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const targetWeek = template?.weeks.find((week) => week.id === weekId);
+    if (!template || !targetWeek) {
+      throw new Error("The template week is no longer available.");
+    }
+    const nextDay = createTemplateDay(day.name.trim() || `Day ${targetWeek.days.length + 1}`, day.focus.trim() || "Training day", [], Math.max(0, ...targetWeek.days.map((currentDay) => currentDay.sequence)) + 1);
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? updateTemplateStructure(candidate, weekId, (week) => ({ ...week, days: [...week.days, nextDay] }))
+      : candidate));
+    return nextDay;
+  }
+
+  async function updateTemplateDay(templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) {
+    await persistTemplates(templates.map((template) => template.id === templateId
+      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus } : currentDay) }))
+      : template));
+  }
+
+  async function addTemplateExercise(templateId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>): Promise<ProgramExercise> {
+    const targetDay = templates.find((template) => template.id === templateId)?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
+    if (!targetDay) {
+      throw new Error("The template training day is no longer available.");
+    }
+    const nextExercise = { ...createExercise(category), ...input };
+    await persistTemplates(templates.map((template) => template.id === templateId
+      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: [...day.exercises, nextExercise] } : day) }))
+      : template));
+    return nextExercise;
+  }
+
+  async function updateTemplateExercise(templateId: string, weekId: string, dayId: string, exercise: ProgramExercise) {
+    await persistTemplates(templates.map((template) => template.id === templateId
+      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
+      : template));
+  }
+
+  async function assignTemplate(templateId: string, athleteId: string, startDate: string): Promise<TrainingProgram> {
+    const template = templates.find((candidate) => candidate.id === templateId);
+    if (!template) {
+      throw new Error("The master template is no longer available.");
+    }
+    if (!isIsoDate(startDate)) {
+      throw new Error("Choose a valid start date as YYYY-MM-DD.");
+    }
+    const now = new Date().toISOString();
+    const clonedWeeks = [...template.weeks].sort((left, right) => left.weekNumber - right.weekNumber).map((week) => ({
+      id: createId("week"),
+      weekNumber: week.weekNumber,
+      name: week.name,
+      days: [...week.days].sort((left, right) => left.sequence - right.sequence).map((day) => ({
+        id: createId("day"),
+        sequence: day.sequence,
+        name: day.name,
+        focus: day.focus,
+        scheduledDate: addCalendarDays(startDate, ((week.weekNumber - 1) * 7) + day.sequence - 1),
+        scheduleUpdatedBy: "coach" as const,
+        scheduleUpdatedAt: now,
+        exercises: day.exercises.map((exercise) => ({ ...exercise, id: createId("exercise") }))
+      }))
+    }));
+    const finalScheduledDate = clonedWeeks.flatMap((week) => week.days).map((day) => day.scheduledDate).sort().at(-1) ?? startDate;
+    const trainingLog: TrainingProgram = { id: createId("live-log"), athleteId, coachId: template.coachId, name: template.name, phase: template.phase, goal: template.goal, startDate, endDate: finalScheduledDate, trainingDaysPerWeek: template.trainingDaysPerWeek, status: "active", updatedAt: now, weeks: clonedWeeks };
+    await persistPrograms([...programs.map((program) => program.athleteId === athleteId && program.status === "active" ? { ...program, status: "completed" as const } : program), trainingLog]);
+    return trainingLog;
+  }
+
   async function addWeek(programId: string) {
     const nextPrograms = programs.map((program) => program.id === programId
       ? { ...program, updatedAt: new Date().toISOString(), weeks: [...program.weeks, createWeek(program.weeks.length + 1)] }
@@ -497,7 +653,8 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       day.name.trim() || `Day ${targetWeek.days.length + 1}`,
       day.focus.trim() || "Training day",
       [],
-      isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(program.startDate, ((targetWeek.weekNumber - 1) * 7) + targetWeek.days.length)
+      isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(program.startDate, ((targetWeek.weekNumber - 1) * 7) + targetWeek.days.length),
+      Math.max(0, ...targetWeek.days.map((currentDay) => currentDay.sequence)) + 1
     );
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days, nextDay] }))
@@ -531,7 +688,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   async function rescheduleWeek(programId: string, weekId: string, startDate: string, updatedBy: DayScheduleAuthor) {
     const nextPrograms = programs.map((program) => program.id === programId
-      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days].sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)).map((day, index) => ({ ...day, scheduledDate: addCalendarDays(startDate, index), scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() })) }))
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days].sort((left, right) => left.sequence - right.sequence).map((day, index) => ({ ...day, scheduledDate: addCalendarDays(startDate, index), scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() })) }))
       : program);
     await persistPrograms(nextPrograms);
   }
@@ -632,12 +789,23 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   return {
     programs,
+    templates,
     comments,
     dayLogs,
     isLoading,
     createProgram,
     updateProgram,
     deleteProgram,
+    createTemplate,
+    updateTemplate,
+    deleteTemplate,
+    addTemplateWeek,
+    updateTemplateWeek,
+    addTemplateDay,
+    updateTemplateDay,
+    addTemplateExercise,
+    updateTemplateExercise,
+    assignTemplate,
     addWeek,
     updateWeek,
     deleteWeek,
@@ -654,4 +822,47 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     updateDayRating,
     addComment
   };
+}
+
+function createTemplateWeek(weekNumber: number, name = `Week ${weekNumber}`): ProgramTemplateWeek {
+  return { id: createId("template-week"), weekNumber, name, days: [] };
+}
+
+function createTemplateDay(name: string, focus: string, exercises: ProgramExercise[] = [], sequence = 0): ProgramTemplateDay {
+  return { id: createId("template-day"), sequence, name, focus, exercises };
+}
+
+function normalizeTemplate(value: unknown): ProgramTemplate | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<ProgramTemplate>;
+  if (typeof candidate.id !== "string" || typeof candidate.coachId !== "string" || typeof candidate.name !== "string" || !isProgramPhase(candidate.phase) || typeof candidate.goal !== "string" || !Number.isInteger(candidate.trainingDaysPerWeek) || typeof candidate.createdAt !== "string" || typeof candidate.updatedAt !== "string" || !Array.isArray(candidate.weeks)) {
+    return null;
+  }
+  return {
+    ...candidate,
+    weeks: candidate.weeks.map((rawWeek, weekIndex) => {
+      const week = rawWeek as Partial<ProgramTemplateWeek>;
+      return {
+        id: typeof week.id === "string" ? week.id : createId("template-week"),
+        weekNumber: Number.isInteger(week.weekNumber) ? week.weekNumber : weekIndex + 1,
+        name: typeof week.name === "string" ? week.name : `Week ${weekIndex + 1}`,
+        days: Array.isArray(week.days) ? week.days.map((rawDay, dayIndex) => {
+          const day = rawDay as Partial<ProgramTemplateDay>;
+          return {
+            id: typeof day.id === "string" ? day.id : createId("template-day"),
+            sequence: Number.isInteger(day.sequence) && day.sequence > 0 ? day.sequence : dayIndex + 1,
+            name: typeof day.name === "string" ? day.name : `Day ${dayIndex + 1}`,
+            focus: typeof day.focus === "string" ? day.focus : "Training day",
+            exercises: Array.isArray(day.exercises) ? day.exercises as ProgramExercise[] : []
+          };
+        }) : []
+      };
+    })
+  };
+}
+
+function updateTemplateStructure(template: ProgramTemplate, weekId: string, change: (week: ProgramTemplateWeek) => ProgramTemplateWeek): ProgramTemplate {
+  return { ...template, updatedAt: new Date().toISOString(), weeks: template.weeks.map((week) => week.id === weekId ? change(week) : week) };
 }

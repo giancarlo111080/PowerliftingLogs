@@ -1,11 +1,11 @@
 import { ActivityIndicator, Text, View } from "react-native";
 import { Redirect } from "expo-router";
 
-import { useProxySession } from "../src/auth/ProxySessionContext";
-import { ProxyLoginScreen } from "../src/components/ProxyLoginScreen";
+import { useSession } from "../src/auth/AuthSessionContext";
+import { AuthScreen } from "../src/components/AuthScreen";
 
 export default function IndexRoute() {
-  const { isLoading, session } = useProxySession();
+  const { isLoading, session } = useSession();
 
   if (isLoading) {
     return (
@@ -20,5 +20,5 @@ export default function IndexRoute() {
     return <Redirect href="/dashboard" />;
   }
 
-  return <ProxyLoginScreen />;
+  return <AuthScreen />;
 }

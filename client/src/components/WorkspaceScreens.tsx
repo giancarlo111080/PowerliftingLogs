@@ -3,7 +3,7 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { BarChart3, CalendarDays, CheckCircle2, ChevronRight, CircleAlert, Dumbbell, MessageCircle, Send, TrendingDown, TrendingUp, Users } from "lucide-react-native";
 import { router } from "expo-router";
 
-import { useProxySession } from "../auth/ProxySessionContext";
+import { useSession } from "../auth/AuthSessionContext";
 import { coachReviewItems, formatTonnage, getCoachInsights } from "../data/dashboardData";
 import { getProgramAnalytics, type WeeklyProgramAnalytics } from "../data/programAnalytics";
 import { useProgramWorkspaceStore } from "../data/programWorkspaceStore";
@@ -30,14 +30,14 @@ function AdherenceGraph({ weeks }: { weeks: WeeklyProgramAnalytics[] }) {
 }
 
 function AccessDenied({ title }: { title: string }) {
-  return <AppShell title={title}><View className="flex-1 items-center justify-center px-6"><CircleAlert size={28} color="#D74F32" /><Text className="mt-4 font-serif text-xl font-bold text-ink">Coach access required</Text><Text className="mt-2 text-center font-serif text-sm text-[#52675F]">This workspace is available from the coach proxy identity.</Text><Pressable className="mt-5 rounded-md bg-ink px-4 py-3" onPress={() => router.replace("/dashboard")}><Text className="font-serif text-sm font-bold text-white">Return to dashboard</Text></Pressable></View></AppShell>;
+  return <AppShell title={title}><View className="flex-1 items-center justify-center px-6"><CircleAlert size={28} color="#D32F2F" /><Text className="mt-4 font-serif text-xl font-bold text-ink">Coach access required</Text><Text className="mt-2 text-center font-serif text-sm text-[#B7B7AF]">This workspace is available to authenticated coach accounts only.</Text><Pressable className="mt-5 bg-ink px-4 py-3" onPress={() => router.replace("/dashboard")}><Text className="font-serif text-sm font-bold text-white">Return to dashboard</Text></Pressable></View></AppShell>;
 }
 
 export function AnalyticsScreen() {
-  const { session, currentProfile, activeAthlete } = useProxySession();
+  const { session, currentProfile, activeAthlete } = useSession();
   const { programs, dayLogs, isLoading } = useProgramWorkspaceStore();
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
-  const isCoach = session?.role === "coach";
+  const isCoach = session?.role === "COACH";
   const athlete = isCoach ? activeAthlete : currentProfile;
   const athletePrograms = programs.filter((program) => program.athleteId === athlete?.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const selectedProgram = athletePrograms.find((program) => program.id === selectedProgramId) ?? athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
@@ -78,7 +78,7 @@ const initialMessages: LocalMessage[] = [
 ];
 
 export function MessagesScreen() {
-  const { session, currentProfile } = useProxySession();
+  const { session, currentProfile } = useSession();
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
 
@@ -94,7 +94,7 @@ export function MessagesScreen() {
   return (
     <AppShell title="Messages">
       <View className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
-        <View className="mb-5 border-l-4 border-signal pl-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{session?.role === "coach" ? "Coach communication" : "Coach thread"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">Competition squat · Day 1</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{session?.role === "coach" ? "Alex Morgan's active training thread" : "Feedback stays attached to your training context"}</Text></View>
+        <View className="mb-5 border-l-4 border-signal pl-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{session?.role === "COACH" ? "Coach communication" : "Coach thread"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">Competition squat · Day 1</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{session?.role === "COACH" ? "Alex Morgan's active training thread" : "Feedback stays attached to your training context"}</Text></View>
         <View className="flex-1 border border-fog bg-paper"><ScrollView className="flex-1" contentContainerClassName="gap-4 p-4" showsVerticalScrollIndicator={false}>{messages.map((message) => <View key={message.id} className={message.isCurrentUser ? "items-end" : "items-start"}><View className={`max-w-[86%] px-4 py-3 ${message.isCurrentUser ? "bg-ink" : "bg-canvas"}`}><Text className={`font-serif text-sm leading-6 ${message.isCurrentUser ? "text-white" : "text-ink"}`}>{message.body}</Text></View><Text className="mt-1 font-serif text-xs text-[#688078]">{message.author} · {message.timestamp}</Text></View>)}</ScrollView><View className="border-t border-fog p-3"><TextInput className="min-h-20 border border-fog bg-canvas p-3 font-serif text-base text-ink" multiline value={draft} onChangeText={setDraft} placeholder="Write a coaching note" placeholderTextColor="#688078" accessibilityLabel="Write a message" /><View className="mt-3 flex-row justify-between"><Text className="font-serif text-xs text-[#52675F]">Local-first thread · syncs when online</Text><Pressable className="h-10 w-10 items-center justify-center rounded-md bg-ink disabled:opacity-50" onPress={sendMessage} disabled={!draft.trim()} accessibilityLabel="Send message"><Send size={17} color="#FFFFFF" /></Pressable></View></View></View>
       </View>
     </AppShell>
@@ -102,12 +102,12 @@ export function MessagesScreen() {
 }
 
 export function AthletesScreen() {
-  const { session, profiles, activeAthlete, selectAthlete } = useProxySession();
-  if (session?.role !== "coach") {
+  const { session, profiles, activeAthlete, selectAthlete } = useSession();
+  if (session?.role !== "COACH") {
     return <AccessDenied title="Athletes" />;
   }
   const insights = getCoachInsights(profiles);
-  const athletes = profiles.filter((profile) => profile.role === "lifter");
+  const athletes = profiles.filter((profile) => profile.role === "ATHLETE");
 
   return (
     <AppShell title="Athletes">
@@ -120,9 +120,9 @@ export function AthletesScreen() {
 }
 
 export function ProgramReviewScreen() {
-  const { session, activeAthlete, profiles } = useProxySession();
+  const { session, activeAthlete, profiles } = useSession();
   const [reviewedIds, setReviewedIds] = useState<string[]>([]);
-  if (session?.role !== "coach") {
+  if (session?.role !== "COACH") {
     return <AccessDenied title="Program Review" />;
   }
   const insight = getCoachInsights(profiles).find((item) => item.athleteId === activeAthlete?.id);

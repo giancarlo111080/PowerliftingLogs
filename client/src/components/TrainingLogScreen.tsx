@@ -2,10 +2,11 @@ import { useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Plus, Send, X } from "lucide-react-native";
 
-import { useProxySession } from "../auth/ProxySessionContext";
+import { useSession } from "../auth/AuthSessionContext";
 import { type ProgramDay, type ProgramDaySetLog, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 import { InstagramLinkModal } from "./InstagramLinkModal";
+import { TrainingLogSchedulePanel } from "./TrainingLogSchedulePanel";
 
 interface ScheduledDay {
   weekId: string;
@@ -68,7 +69,7 @@ function SetStatusIcon({ status }: { status: "pending" | "done" | "skipped" }) {
 }
 
 export function TrainingLogScreen() {
-  const { session, currentProfile, activeAthlete } = useProxySession();
+  const { session, currentProfile, activeAthlete } = useSession();
   const { programs, comments, dayLogs, isLoading, addDay, addExercise, logDaySet, updateDaySetInstagramLink, updateDayRating, addComment } = useProgramWorkspaceStore();
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
@@ -81,12 +82,12 @@ export function TrainingLogScreen() {
   const [isAddingAccessory, setIsAddingAccessory] = useState(false);
   const [accessoryDraft, setAccessoryDraft] = useState<AccessoryDraft>({ name: "", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg" });
 
-  const isCoach = session?.role === "coach";
+  const isCoach = session?.role === "COACH";
   const athlete = isCoach ? activeAthlete : currentProfile;
   const athletePrograms = programs.filter((program) => program.athleteId === athlete?.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const selectedProgram = athletePrograms.find((program) => program.id === selectedProgramId) ?? athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
   const scheduledDays: ScheduledDay[] = selectedProgram
-    ? [...selectedProgram.weeks].sort((left, right) => left.weekNumber - right.weekNumber).flatMap((week) => [...week.days].sort((left, right) => left.scheduledDate.localeCompare(right.scheduledDate)).map((day) => ({ weekId: week.id, weekNumber: week.weekNumber, weekName: week.name, day })))
+    ? [...selectedProgram.weeks].sort((left, right) => left.weekNumber - right.weekNumber).flatMap((week) => [...week.days].sort((left, right) => left.sequence - right.sequence).map((day) => ({ weekId: week.id, weekNumber: week.weekNumber, weekName: week.name, day })))
     : [];
   const selectedDayIndex = Math.max(0, scheduledDays.findIndex((entry) => entry.day.id === selectedDayId));
   const selectedEntry = scheduledDays[selectedDayIndex] ?? null;
@@ -222,10 +223,10 @@ export function TrainingLogScreen() {
   }
 
   async function submitComment() {
-    if (!selectedProgram || !selectedEntry || !commentDraft.trim()) {
+    if (!selectedProgram || !selectedEntry || !currentProfile || !session || !commentDraft.trim()) {
       return;
     }
-    await addComment({ programId: selectedProgram.id, dayId: selectedEntry.day.id, authorProfileId: currentProfile.id, authorName: currentProfile.displayName, authorRole: session.role, body: commentDraft.trim() });
+    await addComment({ programId: selectedProgram.id, dayId: selectedEntry.day.id, authorProfileId: currentProfile.id, authorName: currentProfile.displayName, authorRole: session.role === "COACH" ? "coach" : "lifter", body: commentDraft.trim() });
     setCommentDrafts((drafts) => ({ ...drafts, [selectedEntry.day.id]: "" }));
   }
 
@@ -233,6 +234,7 @@ export function TrainingLogScreen() {
     <AppShell title="Training Log">
       <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-6 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
         <View className="flex-col gap-3 border-l-4 border-signal pl-4 sm:flex-row sm:items-end sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{isCoach ? "Athlete training log" : "Your program"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">{isCoach ? `${athlete.displayName}'s workouts` : "Training Log"}</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{isCoach ? "Navigate every workout, review actual loads and footage, then leave feedback in context." : "Every scheduled workout, actual set, video, rating, and coach note lives here."}</Text></View>{selectedProgram ? <View className="flex-row items-center gap-2"><CalendarDays size={18} color="#2E6F5E" /><Text className="font-serif text-sm font-bold text-ink">{scheduledDays.length} workout{scheduledDays.length === 1 ? "" : "s"}</Text></View> : null}</View>
+        {selectedEntry && selectedProgram ? <TrainingLogSchedulePanel key={selectedEntry.day.id} programId={selectedProgram.id} weekId={selectedEntry.weekId} weekName={selectedEntry.weekName} day={selectedEntry.day} actorRole={session.role === "COACH" ? "coach" : "lifter"} /> : null}
         {message ? <View className="border border-moss bg-[#2E6F5E12] px-4 py-3"><Text className="font-serif text-sm text-moss">{message}</Text></View> : null}
         {isLoading ? <View className="items-center border border-fog bg-paper py-12"><ActivityIndicator color="#2E6F5E" /><Text className="mt-3 font-serif text-sm text-[#52675F]">Loading training logs</Text></View> : null}
 

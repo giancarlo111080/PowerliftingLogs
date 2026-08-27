@@ -1,17 +1,17 @@
 {
   "expo": {
-    "name": "Powerlifting Program",
-    "slug": "powerlifting-program",
+    "name": "Iron Forge",
+    "slug": "iron-forge",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "scheme": "powerlifting-program",
+    "userInterfaceStyle": "dark",
+    "scheme": "iron-forge",
     "platforms": ["ios", "android", "web"],
     "web": {
       "bundler": "metro",
       "output": "static",
-      "name": "Powerlifting Program",
-      "shortName": "Powerlifting"
+      "name": "Iron Forge",
+      "shortName": "Iron Forge"
     },
     "experiments": {
       "typedRoutes": true

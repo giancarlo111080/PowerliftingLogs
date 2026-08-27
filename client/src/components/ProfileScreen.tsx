@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { Bell, CalendarDays, ClipboardCheck, Pencil, Save, Trophy, Users, X } from "lucide-react-native";
 
-import { useProxySession } from "../auth/ProxySessionContext";
+import { useSession } from "../auth/AuthSessionContext";
 import { achievements } from "../data/dashboardData";
 import { AppShell } from "./AppShell";
 
@@ -17,7 +17,7 @@ interface ProfileDraft {
   upcomingMeet: string;
 }
 
-function createDraft(profile: NonNullable<ReturnType<typeof useProxySession>["currentProfile"]>): ProfileDraft {
+function createDraft(profile: NonNullable<ReturnType<typeof useSession>["currentProfile"]>): ProfileDraft {
   return {
     displayName: profile.displayName,
     bodyWeightKg: profile.bodyWeightKg?.toString() ?? "",
@@ -39,7 +39,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 }
 
 export function ProfileScreen() {
-  const { currentProfile, session, updateCurrentProfile } = useProxySession();
+  const { currentProfile, session, updateCurrentProfile } = useSession();
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export function ProfileScreen() {
     return null;
   }
 
-  const isLifter = session.role === "lifter";
+  const isLifter = session.role === "ATHLETE";
 
   function updateDraft(field: keyof ProfileDraft, value: string) {
     setDraft((current) => current ? { ...current, [field]: value } : current);
