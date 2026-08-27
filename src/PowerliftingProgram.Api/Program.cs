@@ -95,8 +95,24 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromHours(1)
         }));
 });
+var configuredClientOrigins = (builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [])
+    .Select(origin => origin.TrimEnd('/'))
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
 builder.Services.AddCors(options => options.AddPolicy("client", policy => policy
-    .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? ["http://localhost:8081", "http://localhost:19006"])
+    .SetIsOriginAllowed(origin =>
+    {
+        var normalizedOrigin = origin.TrimEnd('/');
+        if (configuredClientOrigins.Contains(normalizedOrigin))
+        {
+            return true;
+        }
+
+        return isLocalEnvironment
+            && Uri.TryCreate(normalizedOrigin, UriKind.Absolute, out var candidate)
+            && candidate.IsLoopback
+            && (candidate.Scheme == Uri.UriSchemeHttp || candidate.Scheme == Uri.UriSchemeHttps);
+    })
     .AllowAnyHeader()
     .AllowAnyMethod()));
 builder.Services.AddValidatorsFromAssemblyContaining<LoggedSetValidator>();
@@ -141,7 +157,10 @@ if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("LocalPostg
         .WithOpenApiRoutePattern("/swagger/{documentName}/swagger.json"));
 }
 
-app.UseHttpsRedirection();
+if (!isLocalEnvironment)
+{
+    app.UseHttpsRedirection();
+}
 app.UseRouting();
 app.UseCors("client");
 app.UseAuthentication();

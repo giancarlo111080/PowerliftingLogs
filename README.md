@@ -8,7 +8,7 @@ Iron Forge is dark by default, with charcoal surfaces, chalk text, Iron Crimson 
 
 Registration is open for independent coaches and athletes at `/register`. A coach can also generate an athlete invitation from the Dashboard. The API hashes a one-time 256-bit invite token, expires it after 48 hours, sends the branded **Your Coach has invited you to Iron Forge** email through Resend when `Email__Resend__ApiKey` is configured, and forces invite-based registration to create an `ATHLETE` linked to the issuing coach. With no Resend key in local development, email delivery is skipped and the invitation URL is returned only to the authenticated issuing coach; bearer invitation URLs are never written to application logs.
 
-The sign-in screen also offers **Forgot password?**. Reset requests always return the same response so account existence is not disclosed. For an existing account, the API emails a hashed, single-use reset token that expires after one hour. Completing a reset revokes previously issued sessions. Set `Client__PasswordResetUrl` to the public client callback, such as `https://app.example.com/reset-password`, and configure Resend for delivery. Fixed GitHub Pages demo accounts do not support password changes.
+The sign-in screen also offers **Forgot password?**. In `Development` and `LocalPostgres`, the API returns a hashed, single-use, one-hour reset link directly to the screen so local recovery works without an email provider. The presence of that link can reveal whether a local account exists, so `Authentication__ExposePasswordResetLink` must remain disabled on public deployments. Production keeps the enumeration-safe response and sends the link through Resend. Completing a reset revokes previously issued sessions. Set `Client__PasswordResetUrl` to the client callback, such as `https://app.example.com/reset-password`. Fixed GitHub Pages demo accounts do not support password changes.
 
 The coach-only **Programs** route manages reusable master templates: `Template -> Weeks -> Days -> Exercises -> Sets x Reps @ RPE / %1RM / exact load`. Assigning a template clones it into a dated, active live training log for exactly one linked athlete. The master template is unchanged afterward; coaches can update a live training day through the API without mutating the source template. In Training Log, athletes record completed loads, reps, and statuses, and coaches can review and adjust the assigned work.
 
@@ -208,7 +208,7 @@ The client has a WatermelonDB schema at `client/src/data/watermelonSchema.ts` fo
 
 - `POST /api/auth/register`: registers an independent `COACH` or `ATHLETE`, or accepts a valid athlete invitation.
 - `POST /api/auth/login`: returns a JWT-backed account session.
-- `POST /api/auth/password-reset/request`: sends an enumeration-safe, one-hour password reset link when the account exists.
+- `POST /api/auth/password-reset/request`: returns a one-hour reset link in explicit local mode, or sends the enumeration-safe production email when the account exists.
 - `POST /api/auth/password-reset/complete`: consumes a reset token, replaces the password, and revokes existing sessions.
 - `GET /api/auth/me`: returns the authenticated account.
 - `GET /api/auth/invitations/{token}`: validates an unexpired invitation for registration.
@@ -279,6 +279,7 @@ To use a live API, deploy the .NET API and PostgreSQL to separate hosting first.
 
 - Keep `Authentication__Jwt__SigningKey` in secret storage, use a random value of at least 64 bytes for HS512, and rotate it on a regular production schedule.
 - Keep `ConnectionStrings__TrainingDatabase` in secret storage. The committed PostgreSQL credentials are scoped to the explicit `LocalPostgres` environment only.
+- Keep `Authentication__ExposePasswordResetLink=false` in every public environment; direct reset links are intended only for local development.
 - Set `Email__Resend__ApiKey` and a verified `Email__Resend__From` address before sending production invitations.
 - Set `Client__RegistrationUrl` and `Client__PasswordResetUrl` to the deployed client routes before sending invitations or password-reset email.
 - Terminate TLS before the API and allow only trusted CORS origins.

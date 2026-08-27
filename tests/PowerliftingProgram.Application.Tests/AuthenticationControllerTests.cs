@@ -25,7 +25,38 @@ public sealed class AuthenticationControllerTests
         var accepted = Assert.IsType<AcceptedResult>(result.Result);
         var response = Assert.IsType<PasswordResetRequestedResponse>(accepted.Value);
         Assert.Equal("If an account exists for that email address, a password reset link has been sent.", response.Message);
+        Assert.Null(response.ResetUrl);
         Assert.Null(emailService.ResetUrl);
+    }
+
+    [Fact]
+    public async Task RequestPasswordReset_WhenLocalLinkIsEnabled_ReturnsUsableLinkWithoutSendingEmail()
+    {
+        await using var database = CreateDatabase();
+        var passwordHasher = new PasswordHashingService();
+        var user = CreateUser(passwordHasher.Hash("OriginalPassword!"));
+        database.PlatformUsers.Add(user);
+        await database.SaveChangesAsync();
+        var emailService = new RecordingPasswordResetEmailService();
+        var controller = CreateController(database, emailService, passwordHasher, exposeResetLink: true);
+
+        var requestResult = await controller.RequestPasswordReset(
+            new RequestPasswordResetRequest(user.Email),
+            CancellationToken.None);
+
+        var accepted = Assert.IsType<AcceptedResult>(requestResult.Result);
+        var response = Assert.IsType<PasswordResetRequestedResponse>(accepted.Value);
+        Assert.Equal("If an account exists for that email address, use the one-hour reset link below.", response.Message);
+        Assert.Null(emailService.ResetUrl);
+        Assert.NotNull(user.PasswordResetTokenHash);
+
+        var token = ResetTokenFrom(response.ResetUrl);
+        var completeResult = await controller.CompletePasswordReset(
+            new CompletePasswordResetRequest(token, "ReplacementPassword!"),
+            CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(completeResult);
+        Assert.True(passwordHasher.Verify("ReplacementPassword!", user.PasswordHash));
     }
 
     [Fact]
@@ -86,13 +117,15 @@ public sealed class AuthenticationControllerTests
     private static AuthenticationController CreateController(
         TrainingDbContext database,
         RecordingPasswordResetEmailService emailService,
-        PasswordHashingService? passwordHasher = null)
+        PasswordHashingService? passwordHasher = null,
+        bool exposeResetLink = false)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Authentication:Jwt:SigningKey"] = new string('x', 64),
             ["Authentication:Jwt:Issuer"] = "tests",
             ["Authentication:Jwt:Audience"] = "tests",
+            ["Authentication:ExposePasswordResetLink"] = exposeResetLink.ToString(),
             ["Client:PasswordResetUrl"] = "https://example.test/reset-password"
         }).Build();
         return new AuthenticationController(database, passwordHasher ?? new PasswordHashingService(), new JwtTokenService(configuration), emailService, configuration);

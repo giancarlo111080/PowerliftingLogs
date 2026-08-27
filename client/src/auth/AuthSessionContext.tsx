@@ -145,7 +145,14 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
         const account = await getCurrentAccount(persistedSession.accessToken);
         const currentProfile = profileFromAccount(account);
         const role = normalizeRole(account.role);
-        const roster = role === "COACH" ? await getCoachAthletes(persistedSession.accessToken) : [];
+        let roster: Awaited<ReturnType<typeof getCoachAthletes>> = [];
+        if (role === "COACH") {
+          try {
+            roster = await getCoachAthletes(persistedSession.accessToken);
+          }
+          catch {
+          }
+        }
         const stored = storedProfiles ? JSON.parse(storedProfiles) as PlatformProfile[] : [];
         const nextProfiles = mergeProfiles(currentProfile, roster.map((athlete) => athleteProfile(athlete, account.id)), stored);
         if (isMounted) {
@@ -188,10 +195,20 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
   async function establish(account: AccountResponse, accessToken: string) {
     const current = profileFromAccount(account);
     const role = normalizeRole(account.role);
-    const roster = role === "COACH" ? await getCoachAthletes(accessToken) : [];
-    const nextProfiles = mergeProfiles(current, roster.map((athlete) => athleteProfile(athlete, account.id)), profiles);
-    const activeAthleteId = role === "ATHLETE" ? current.id : roster[0]?.athleteProfileId ?? "";
-    await persist({ userId: account.id, accessToken, role, activeAthleteId }, nextProfiles);
+    const initialProfiles = mergeProfiles(current, [], profiles);
+    const initialSession = { userId: account.id, accessToken, role, activeAthleteId: role === "ATHLETE" ? current.id : "" };
+    await persist(initialSession, initialProfiles);
+    if (role !== "COACH") {
+      return;
+    }
+
+    try {
+      const roster = await getCoachAthletes(accessToken);
+      const nextProfiles = mergeProfiles(current, roster.map((athlete) => athleteProfile(athlete, account.id)), profiles);
+      await persist({ ...initialSession, activeAthleteId: roster[0]?.athleteProfileId ?? "" }, nextProfiles);
+    }
+    catch {
+    }
   }
 
   async function login(email: string, password: string) {

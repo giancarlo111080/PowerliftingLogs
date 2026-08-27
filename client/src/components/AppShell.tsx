@@ -1,6 +1,6 @@
 import { type ReactNode, useState } from "react";
 import { Modal, Pressable, Text, View, useWindowDimensions } from "react-native";
-import { BarChart3, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
+import { BarChart3, BrainCircuit, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, Gauge, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
 import { Redirect, router, type Href, usePathname } from "expo-router";
 
 import { type PlatformRole, useSession } from "../auth/AuthSessionContext";
@@ -17,6 +17,8 @@ const navigationItems: NavigationItem[] = [
   { label: "Dashboard", href: "/dashboard", Icon: LayoutDashboard, roles: ["ATHLETE", "COACH"] },
   { label: "Training Log", href: "/training", Icon: Dumbbell, roles: ["ATHLETE", "COACH"] },
   { label: "Analytics", href: "/analytics", Icon: BarChart3, roles: ["ATHLETE", "COACH"] },
+  { label: "Performance Hub", href: "/performance", Icon: Gauge, roles: ["ATHLETE"] },
+  { label: "Intelligence Desk", href: "/intelligence", Icon: BrainCircuit, roles: ["COACH"] },
   { label: "Athletes", href: "/athletes", Icon: Users, roles: ["COACH"] },
   { label: "Programs", href: "/programs", Icon: ClipboardList, roles: ["COACH"] },
   { label: "Program Review", href: "/program-review", Icon: ClipboardCheck, roles: ["COACH"] },

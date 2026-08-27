@@ -10,7 +10,7 @@ using PowerliftingProgram.Infrastructure.Services;
 namespace PowerliftingProgram.Api.Controllers;
 
 public sealed record CreateCoachInvitationRequest(string Email);
-public sealed record CoachInvitationResponse(Guid Id, string RecipientEmail, DateTimeOffset ExpiresAt, string RegistrationUrl);
+public sealed record CoachInvitationResponse(Guid Id, string RecipientEmail, DateTimeOffset ExpiresAt, string RegistrationUrl, bool EmailSent);
 public sealed record CoachAthleteResponse(Guid AthleteProfileId, Guid UserId, string DisplayName, string Email);
 
 [Authorize(Roles = "COACH")]
@@ -58,8 +58,8 @@ public sealed class CoachInvitationsController(
 
         var registrationBaseUrl = configuration["Client:RegistrationUrl"] ?? throw new InvalidOperationException("Client:RegistrationUrl is required.");
         var registrationUrl = $"{registrationBaseUrl}?token={Uri.EscapeDataString(rawToken)}";
-        await invitationEmailService.SendAsync(recipientEmail, coach.DisplayName, registrationUrl, cancellationToken);
-        return Created($"/api/coach/athlete-invitations/{invitation.Id}", new CoachInvitationResponse(invitation.Id, recipientEmail, invitation.ExpiresAt, registrationUrl));
+        var emailSent = await invitationEmailService.SendAsync(recipientEmail, coach.DisplayName, registrationUrl, cancellationToken);
+        return Created($"/api/coach/athlete-invitations/{invitation.Id}", new CoachInvitationResponse(invitation.Id, recipientEmail, invitation.ExpiresAt, registrationUrl, emailSent));
     }
 
     [HttpGet("athletes")]
@@ -72,9 +72,11 @@ public sealed class CoachInvitationsController(
             return Unauthorized();
         }
 
-        var athletes = await database.PlatformUsers.AsNoTracking()
-            .Where(user => user.Role == PlatformRole.Athlete && user.CoachId == coachId)
-            .Select(user => new CoachAthleteResponse(user.AthleteProfile!.Id, user.Id, user.DisplayName, user.Email))
+        var athletes = await database.AthleteProfiles.AsNoTracking()
+            .Where(profile => profile.PlatformUser != null
+                && profile.PlatformUser.Role == PlatformRole.Athlete
+                && profile.PlatformUser.CoachId == coachId)
+            .Select(profile => new CoachAthleteResponse(profile.Id, profile.PlatformUserId!.Value, profile.PlatformUser!.DisplayName, profile.PlatformUser.Email))
             .OrderBy(user => user.DisplayName)
             .ToListAsync(cancellationToken);
         return Ok(athletes);

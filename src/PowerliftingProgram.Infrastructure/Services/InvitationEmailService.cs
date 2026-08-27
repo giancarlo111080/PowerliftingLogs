@@ -6,7 +6,7 @@ namespace PowerliftingProgram.Infrastructure.Services;
 
 public interface IInvitationEmailService
 {
-    Task SendAsync(string recipientEmail, string coachName, string registrationUrl, CancellationToken cancellationToken);
+    Task<bool> SendAsync(string recipientEmail, string coachName, string registrationUrl, CancellationToken cancellationToken);
 }
 
 public sealed class ResendInvitationEmailService(
@@ -14,13 +14,13 @@ public sealed class ResendInvitationEmailService(
     IConfiguration configuration,
     ILogger<ResendInvitationEmailService> logger) : IInvitationEmailService
 {
-    public async Task SendAsync(string recipientEmail, string coachName, string registrationUrl, CancellationToken cancellationToken)
+    public async Task<bool> SendAsync(string recipientEmail, string coachName, string registrationUrl, CancellationToken cancellationToken)
     {
         var apiKey = configuration["Email:Resend:ApiKey"];
         if (string.IsNullOrWhiteSpace(apiKey))
         {
             logger.LogInformation("Invitation email delivery is disabled; invitation created for {RecipientEmail}.", recipientEmail);
-            return;
+            return false;
         }
 
         var sender = configuration["Email:Resend:From"] ?? "Iron Forge <invites@example.com>";
@@ -35,8 +35,22 @@ public sealed class ResendInvitationEmailService(
             })
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-        var response = await httpClientFactory.CreateClient(nameof(ResendInvitationEmailService)).SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            using var response = await httpClientFactory.CreateClient(nameof(ResendInvitationEmailService)).SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                return true;
+            }
+
+            logger.LogError("Invitation email delivery failed with status {StatusCode} for {RecipientEmail}.", response.StatusCode, recipientEmail);
+        }
+        catch (HttpRequestException exception)
+        {
+            logger.LogError(exception, "Invitation email delivery failed for {RecipientEmail}.", recipientEmail);
+        }
+
+        return false;
     }
 }
 

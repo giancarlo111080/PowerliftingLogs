@@ -14,7 +14,7 @@ public sealed record RegisterRequest(string DisplayName, string Email, string Pa
 public sealed record LoginRequest(string Email, string Password);
 public sealed record RequestPasswordResetRequest(string Email);
 public sealed record CompletePasswordResetRequest(string Token, string Password);
-public sealed record PasswordResetRequestedResponse(string Message);
+public sealed record PasswordResetRequestedResponse(string Message, string? ResetUrl = null);
 public sealed record AccountResponse(Guid Id, string DisplayName, string Email, PlatformRole Role, Guid? CoachId, Guid? AthleteProfileId);
 public sealed record SessionResponse(string AccessToken, AccountResponse Account);
 public sealed record InvitationContextResponse(string CoachName, string RecipientEmail, DateTimeOffset ExpiresAt);
@@ -29,6 +29,7 @@ public sealed class AuthenticationController(
     IConfiguration configuration) : ControllerBase
 {
     private const string PasswordResetRequestedMessage = "If an account exists for that email address, a password reset link has been sent.";
+    private const string LocalPasswordResetRequestedMessage = "If an account exists for that email address, use the one-hour reset link below.";
 
     [AllowAnonymous]
     [EnableRateLimiting("authentication")]
@@ -157,6 +158,8 @@ public sealed class AuthenticationController(
             return ValidationProblem(ModelState);
         }
 
+        var exposeResetLink = configuration.GetValue<bool>("Authentication:ExposePasswordResetLink");
+        string? exposedResetUrl = null;
         var user = await database.PlatformUsers.SingleOrDefaultAsync(
             candidate => candidate.NormalizedEmail == NormalizeEmail(request.Email),
             cancellationToken);
@@ -171,10 +174,19 @@ public sealed class AuthenticationController(
             var resetBaseUrl = configuration["Client:PasswordResetUrl"]
                 ?? throw new InvalidOperationException("Client:PasswordResetUrl is required.");
             var resetUrl = $"{resetBaseUrl}?token={Uri.EscapeDataString(rawToken)}";
-            await passwordResetEmailService.SendAsync(user.Email, user.DisplayName, resetUrl, cancellationToken);
+            if (exposeResetLink)
+            {
+                exposedResetUrl = resetUrl;
+            }
+            else
+            {
+                await passwordResetEmailService.SendAsync(user.Email, user.DisplayName, resetUrl, cancellationToken);
+            }
         }
 
-        return Accepted(new PasswordResetRequestedResponse(PasswordResetRequestedMessage));
+        return Accepted(new PasswordResetRequestedResponse(
+            exposeResetLink ? LocalPasswordResetRequestedMessage : PasswordResetRequestedMessage,
+            exposedResetUrl));
     }
 
     [AllowAnonymous]

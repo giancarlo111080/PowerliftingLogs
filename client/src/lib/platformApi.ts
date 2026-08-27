@@ -20,6 +20,14 @@ export interface InvitationContextResponse {
   expiresAt: string;
 }
 
+export interface CoachInvitationResponse {
+  id: string;
+  recipientEmail: string;
+  expiresAt: string;
+  registrationUrl: string;
+  emailSent: boolean;
+}
+
 export interface CoachAthleteResponse {
   athleteProfileId: string;
   userId: string;
@@ -83,15 +91,21 @@ function staticDemoError(message: string, status = 400): Promise<never> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}, accessToken?: string): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...init.headers
-    }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...init.headers
+      }
+    });
+  }
+  catch {
+    throw new PlatformApiError(`Could not reach the Iron Forge API at ${apiBaseUrl}. Confirm the API is running and restart it after changing CORS settings.`, 0);
+  }
   if (!response.ok) {
     let message = "The Iron Forge server could not complete this request.";
     try {
@@ -153,14 +167,14 @@ export function createAthleteInvitation(accessToken: string, email: string) {
   if (isStaticDemo) {
     return staticDemoError("Coach invitations require the hosted API.");
   }
-  return request<{ id: string; recipientEmail: string; expiresAt: string; registrationUrl: string }>("/api/coach/athlete-invitations", { method: "POST", body: JSON.stringify({ email }) }, accessToken);
+  return request<CoachInvitationResponse>("/api/coach/athlete-invitations", { method: "POST", body: JSON.stringify({ email }) }, accessToken);
 }
 
 export function requestPasswordReset(email: string) {
   if (isStaticDemo) {
     return staticDemoError("Password reset is unavailable for fixed demo accounts. Use a demo workspace button to sign in.");
   }
-  return request<{ message: string }>("/api/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email }) });
+  return request<{ message: string; resetUrl: string | null }>("/api/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email }) });
 }
 
 export function completePasswordReset(token: string, password: string) {
