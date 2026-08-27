@@ -69,6 +69,7 @@ public enum AchievementType
 
 public sealed class AthleteProfile : Entity
 {
+    public Guid? PlatformUserId { get; set; }
     public required string ExternalUserId { get; set; }
     public required string DisplayName { get; set; }
     public AthleteSex Sex { get; set; }
@@ -84,6 +85,7 @@ public sealed class AthleteProfile : Entity
     public int CurrentWorkoutStreak { get; set; }
     public DateOnly? LastCompletedTrainingDate { get; set; }
 
+    public PlatformUser? PlatformUser { get; set; }
     public ICollection<TrainingBlock> TrainingBlocks { get; } = new List<TrainingBlock>();
     public ICollection<CommentThread> CommentThreads { get; } = new List<CommentThread>();
     public ICollection<AthleteAchievement> Achievements { get; } = new List<AthleteAchievement>();
@@ -92,6 +94,8 @@ public sealed class AthleteProfile : Entity
 public sealed class TrainingBlock : Entity
 {
     public Guid AthleteProfileId { get; set; }
+    public Guid? CoachId { get; set; }
+    public Guid? ProgramTemplateId { get; set; }
     public required string Tag { get; set; }
     public required string Name { get; set; }
     public DateOnly StartsOn { get; set; }
@@ -99,6 +103,8 @@ public sealed class TrainingBlock : Entity
     public bool IsActive { get; set; }
 
     public AthleteProfile? AthleteProfile { get; set; }
+    public PlatformUser? Coach { get; set; }
+    public ProgramTemplate? ProgramTemplate { get; set; }
     public ICollection<TrainingWeek> Weeks { get; } = new List<TrainingWeek>();
 }
 
@@ -133,6 +139,9 @@ public sealed class PrescribedExercise : Entity
     public ExerciseType ExerciseType { get; set; }
     public decimal ExerciseTypeModifier { get; set; } = 1m;
     public int SortOrder { get; set; }
+    public TemplatePrescriptionMode PrescriptionMode { get; set; }
+    public decimal PrescriptionValue { get; set; }
+    public string WeightUnit { get; set; } = "kg";
     public decimal TargetEstimatedOneRepMaxKg { get; set; }
 
     public TrainingDay? TrainingDay { get; set; }

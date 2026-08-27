@@ -29,6 +29,11 @@ public static class DependencyInjection
         }
 
         services.AddScoped<WorkoutSyncService>();
+        services.AddScoped<CoachAccessService>();
+        services.AddSingleton<PasswordHashingService>();
+        services.AddSingleton<JwtTokenService>();
+        services.AddHttpClient(nameof(ResendInvitationEmailService));
+        services.AddScoped<IInvitationEmailService, ResendInvitationEmailService>();
         services.AddSingleton<InstagramVideoUrlPolicy>();
         return services;
     }

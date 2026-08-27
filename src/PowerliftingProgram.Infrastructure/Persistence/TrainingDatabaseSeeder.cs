@@ -1,12 +1,15 @@
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Domain.Entities;
+using PowerliftingProgram.Infrastructure.Services;
 
 namespace PowerliftingProgram.Infrastructure.Persistence;
 
 public static class TrainingDatabaseSeeder
 {
-    public static async Task SeedAsync(TrainingDbContext database, CancellationToken cancellationToken = default)
+    public static async Task SeedAsync(TrainingDbContext database, PasswordHashingService passwordHashingService, CancellationToken cancellationToken = default)
     {
+        await SeedTestAccountsAsync(database, passwordHashingService, cancellationToken);
+
         const string demoExternalUserId = "demo-athlete";
         if (await database.AthleteProfiles.AnyAsync(
             profile => profile.ExternalUserId == demoExternalUserId,
@@ -179,6 +182,63 @@ public static class TrainingDatabaseSeeder
             squatSetOne, squatSetTwo, squatSetThree,
             benchSetOne, benchSetTwo, benchSetThree, rowSetOne, rowSetTwo,
             commentThread, coachComment, achievement, processedCommand);
+        await database.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task SeedTestAccountsAsync(TrainingDbContext database, PasswordHashingService passwordHashingService, CancellationToken cancellationToken)
+    {
+        const string coachEmail = "giancarlojavier22@gmail.com";
+        const string athleteEmail = "giancarlomallarejavier22@gmail.com";
+        var coach = await database.PlatformUsers.SingleOrDefaultAsync(user => user.NormalizedEmail == coachEmail.ToUpperInvariant(), cancellationToken);
+        if (coach is null)
+        {
+            coach = new PlatformUser
+            {
+                Id = Guid.Parse("6c425454-2eb1-4d42-942f-4f628600cfbd"),
+                Email = coachEmail,
+                NormalizedEmail = coachEmail.ToUpperInvariant(),
+                DisplayName = "Giancarlo Javier",
+                PasswordHash = passwordHashingService.Hash("imthecoach"),
+                Role = PlatformRole.Coach
+            };
+            database.PlatformUsers.Add(coach);
+        }
+
+        var athleteUser = await database.PlatformUsers.SingleOrDefaultAsync(user => user.NormalizedEmail == athleteEmail.ToUpperInvariant(), cancellationToken);
+        if (athleteUser is null)
+        {
+            athleteUser = new PlatformUser
+            {
+                Id = Guid.Parse("822775a1-357c-4d48-894b-54598f4945a4"),
+                Email = athleteEmail,
+                NormalizedEmail = athleteEmail.ToUpperInvariant(),
+                DisplayName = "Gee Javier",
+                PasswordHash = passwordHashingService.Hash("1234567!@#$%"),
+                Role = PlatformRole.Athlete,
+                CoachId = coach.Id
+            };
+            database.PlatformUsers.Add(athleteUser);
+        }
+        else if (athleteUser.Role == PlatformRole.Athlete && athleteUser.CoachId != coach.Id)
+        {
+            athleteUser.CoachId = coach.Id;
+            athleteUser.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        var athleteProfile = await database.AthleteProfiles.SingleOrDefaultAsync(profile => profile.PlatformUserId == athleteUser.Id, cancellationToken);
+        if (athleteProfile is null)
+        {
+            database.AthleteProfiles.Add(new AthleteProfile
+            {
+                Id = Guid.Parse("edcd3643-d94d-4f75-b916-a605df16213b"),
+                PlatformUserId = athleteUser.Id,
+                ExternalUserId = $"platform-{athleteUser.Id}",
+                DisplayName = athleteUser.DisplayName,
+                Sex = AthleteSex.PreferNotToSay,
+                CompetitionWeightClass = "Unspecified"
+            });
+        }
+
         await database.SaveChangesAsync(cancellationToken);
     }
 

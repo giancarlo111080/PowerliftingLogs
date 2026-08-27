@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Application.Contracts;
 using PowerliftingProgram.Application.Services;
@@ -10,12 +11,14 @@ namespace PowerliftingProgram.Api.Controllers;
 public sealed record WorkingSetCalculationRequest(decimal EstimatedOneRepMaxKg, int Sets, int Repetitions, decimal TargetRpe);
 public sealed record WarmUpCalculationRequest(decimal WorkingLoadKg, decimal BarbellKg = 20m, decimal PlateIncrementKg = 2.5m);
 
+[Authorize]
 [ApiController]
 [Route("api/training")]
 public sealed class TrainingAnalyticsController(
     ITrainingCalculationService calculationService,
     IFatigueModelingService fatigueModelingService,
-    TrainingDbContext database) : ControllerBase
+    TrainingDbContext database,
+    CoachAccessService coachAccessService) : ControllerBase
 {
     [HttpPost("working-sets")]
     [ProducesResponseType(typeof(IReadOnlyList<WorkingSetTarget>), StatusCodes.Status200OK)]
@@ -43,6 +46,10 @@ public sealed class TrainingAnalyticsController(
         [FromQuery] DateOnly? throughDate,
         CancellationToken cancellationToken)
     {
+        if (!await coachAccessService.CanAccessAthleteAsync(User, athleteId, cancellationToken))
+        {
+            return Forbid();
+        }
         var athlete = await database.AthleteProfiles.SingleOrDefaultAsync(profile => profile.Id == athleteId, cancellationToken);
         if (athlete is null)
         {
@@ -77,12 +84,18 @@ public sealed class TrainingAnalyticsController(
     {
         var trainingDay = await database.TrainingDays
             .AsNoTracking()
+            .Include(day => day.TrainingWeek)
+            .ThenInclude(week => week!.TrainingBlock)
             .Include(day => day.Exercises)
             .ThenInclude(exercise => exercise.Sets)
             .SingleOrDefaultAsync(day => day.Id == trainingDayId, cancellationToken);
         if (trainingDay is null)
         {
             return NotFound();
+        }
+        if (!await coachAccessService.CanAccessAthleteAsync(User, trainingDay.TrainingWeek!.TrainingBlock!.AthleteProfileId, cancellationToken))
+        {
+            return Forbid();
         }
 
         return Ok(calculationService.CalculateSessionAnalytics(trainingDay, athleteOneRepMaxKg));

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PowerliftingProgram.Infrastructure.Services;
 
@@ -5,6 +6,7 @@ namespace PowerliftingProgram.Api.Controllers;
 
 public sealed record InstagramVideoUrlRequest(string InstagramVideoUrl);
 
+[Authorize]
 [ApiController]
 [Route("api/instagram")]
 public sealed class CoachingController(InstagramVideoUrlPolicy instagramVideoUrlPolicy) : ControllerBase

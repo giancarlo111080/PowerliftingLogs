@@ -32,6 +32,91 @@ public sealed class AthleteProfileConfiguration : IEntityTypeConfiguration<Athle
         builder.Property(profile => profile.DeadliftOneRepMaxKg).HasPrecision(6, 2);
         builder.Property(profile => profile.CumulativeWorkingSetTonnageKg).HasPrecision(12, 2);
         builder.HasIndex(profile => profile.ExternalUserId).IsUnique();
+        builder.HasIndex(profile => profile.PlatformUserId).IsUnique();
+        builder.HasOne(profile => profile.PlatformUser).WithOne(user => user.AthleteProfile)
+            .HasForeignKey<AthleteProfile>(profile => profile.PlatformUserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PlatformUserConfiguration : IEntityTypeConfiguration<PlatformUser>
+{
+    public void Configure(EntityTypeBuilder<PlatformUser> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(user => user.Email).HasMaxLength(320).IsRequired();
+        builder.Property(user => user.NormalizedEmail).HasMaxLength(320).IsRequired();
+        builder.Property(user => user.DisplayName).HasMaxLength(120).IsRequired();
+        builder.Property(user => user.PasswordHash).HasMaxLength(512).IsRequired();
+        builder.HasIndex(user => user.NormalizedEmail).IsUnique();
+        builder.HasOne(user => user.Coach).WithMany(coach => coach.Athletes)
+            .HasForeignKey(user => user.CoachId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class CoachInvitationConfiguration : IEntityTypeConfiguration<CoachInvitation>
+{
+    public void Configure(EntityTypeBuilder<CoachInvitation> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(invitation => invitation.RecipientEmail).HasMaxLength(320).IsRequired();
+        builder.Property(invitation => invitation.TokenHash).HasMaxLength(128).IsRequired();
+        builder.HasIndex(invitation => invitation.TokenHash).IsUnique();
+        builder.HasIndex(invitation => new { invitation.CoachId, invitation.RecipientEmail });
+        builder.HasOne(invitation => invitation.Coach).WithMany(coach => coach.SentInvitations)
+            .HasForeignKey(invitation => invitation.CoachId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ProgramTemplateConfiguration : IEntityTypeConfiguration<ProgramTemplate>
+{
+    public void Configure(EntityTypeBuilder<ProgramTemplate> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(template => template.Name).HasMaxLength(160).IsRequired();
+        builder.Property(template => template.Goal).HasMaxLength(1_000).IsRequired();
+        builder.Property(template => template.Phase).HasMaxLength(80);
+        builder.HasIndex(template => new { template.CoachId, template.Name }).IsUnique();
+        builder.HasOne(template => template.Coach).WithMany(coach => coach.ProgramTemplates)
+            .HasForeignKey(template => template.CoachId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ProgramTemplateWeekConfiguration : IEntityTypeConfiguration<ProgramTemplateWeek>
+{
+    public void Configure(EntityTypeBuilder<ProgramTemplateWeek> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(week => week.Name).HasMaxLength(120).IsRequired();
+        builder.HasIndex(week => new { week.ProgramTemplateId, week.WeekNumber }).IsUnique();
+        builder.HasOne(week => week.ProgramTemplate).WithMany(template => template.Weeks)
+            .HasForeignKey(week => week.ProgramTemplateId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ProgramTemplateDayConfiguration : IEntityTypeConfiguration<ProgramTemplateDay>
+{
+    public void Configure(EntityTypeBuilder<ProgramTemplateDay> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(day => day.Name).HasMaxLength(160).IsRequired();
+        builder.Property(day => day.Focus).HasMaxLength(300).IsRequired();
+        builder.HasIndex(day => new { day.ProgramTemplateWeekId, day.DayNumber }).IsUnique();
+        builder.HasOne(day => day.ProgramTemplateWeek).WithMany(week => week.Days)
+            .HasForeignKey(day => day.ProgramTemplateWeekId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ProgramTemplateExerciseConfiguration : IEntityTypeConfiguration<ProgramTemplateExercise>
+{
+    public void Configure(EntityTypeBuilder<ProgramTemplateExercise> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(exercise => exercise.Name).HasMaxLength(160).IsRequired();
+        builder.Property(exercise => exercise.PrescriptionValue).HasPrecision(7, 2);
+        builder.Property(exercise => exercise.WeightUnit).HasMaxLength(4).IsRequired();
+        builder.HasIndex(exercise => new { exercise.ProgramTemplateDayId, exercise.SortOrder }).IsUnique();
+        builder.HasOne(exercise => exercise.ProgramTemplateDay).WithMany(day => day.Exercises)
+            .HasForeignKey(exercise => exercise.ProgramTemplateDayId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -45,6 +130,10 @@ public sealed class TrainingBlockConfiguration : IEntityTypeConfiguration<Traini
         builder.HasIndex(block => new { block.AthleteProfileId, block.Tag }).IsUnique();
         builder.HasOne(block => block.AthleteProfile).WithMany(profile => profile.TrainingBlocks)
             .HasForeignKey(block => block.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(block => block.Coach).WithMany().HasForeignKey(block => block.CoachId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(block => block.ProgramTemplate).WithMany().HasForeignKey(block => block.ProgramTemplateId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
 
@@ -79,6 +168,8 @@ public sealed class PrescribedExerciseConfiguration : IEntityTypeConfiguration<P
         builder.ConfigureEntity();
         builder.Property(exercise => exercise.Name).HasMaxLength(160).IsRequired();
         builder.Property(exercise => exercise.ExerciseTypeModifier).HasPrecision(5, 3);
+        builder.Property(exercise => exercise.PrescriptionValue).HasPrecision(7, 2);
+        builder.Property(exercise => exercise.WeightUnit).HasMaxLength(4).IsRequired();
         builder.Property(exercise => exercise.TargetEstimatedOneRepMaxKg).HasPrecision(6, 2);
         builder.HasIndex(exercise => new { exercise.TrainingDayId, exercise.SortOrder }).IsUnique();
         builder.HasOne(exercise => exercise.TrainingDay).WithMany(day => day.Exercises)
