@@ -2,6 +2,14 @@
 
 A local-first powerlifting and athletic coaching platform. The repository contains a .NET 8 API with a PostgreSQL database, an Expo React Native client that exports to the web, and a fully client-side GitHub Pages demo. The product stores a public Instagram post or Reel URL against a training set; it does not upload, proxy, download, or host video.
 
+## Iron Forge Coaching Platform
+
+Iron Forge is dark by default, with charcoal surfaces, chalk text, Iron Crimson actions, zinc highlights, industrial display headings, and monospaced training data. The Expo client uses explicit `COACH` and `ATHLETE` roles. A server-issued JWT is stored only for the authenticated session; client navigation guards keep athletes out of master-program screens, while API guards ensure a coach can access only athletes linked to that coach.
+
+Registration is open for independent coaches and athletes at `/register`. A coach can also generate an athlete invitation from the Dashboard. The API hashes a one-time 256-bit invite token, expires it after 48 hours, sends the branded **Your Coach has invited you to Iron Forge** email through Resend when `Email__Resend__ApiKey` is configured, and forces invite-based registration to create an `ATHLETE` linked to the issuing coach. With no Resend key in local development, the invitation URL is logged by the API and returned only to the authenticated issuing coach.
+
+The coach-only **Programs** route manages reusable master templates: `Template -> Weeks -> Days -> Exercises -> Sets x Reps @ RPE / %1RM / exact load`. Assigning a template clones it into a dated, active live training log for exactly one linked athlete. The master template is unchanged afterward; coaches can update a live training day through the API without mutating the source template. In Training Log, athletes record completed loads, reps, and statuses, and coaches can review and adjust the assigned work.
+
 ## System Overview and Architecture
 
 ```mermaid
@@ -98,7 +106,7 @@ The committed launch profile sets `ASPNETCORE_ENVIRONMENT=Development`, so Visua
 
 ### Create PostgreSQL and Test Data
 
-The durable PostgreSQL schema is defined by EF migration `20260827000000_InitialCreate`. The migration creates the athlete, training hierarchy, set logging, comment, achievement, and synchronization-ledger tables. `database/scripts/seed-test-data.sql` is an idempotent fixture matching the mock dataset.
+The durable PostgreSQL schema is defined by EF migrations `20260827000000_InitialCreate` and `20260828000000_AddCoachingPlatform`. Together they create the athlete, account, coach invitation, master-template, live-training, set logging, comment, achievement, and synchronization-ledger tables. `database/scripts/seed-test-data.sql` is an idempotent fixture matching the mock dataset.
 
 1. Install Docker Desktop and the EF CLI once: `dotnet tool install --global dotnet-ef`.
    On Windows with WinGet, install Docker Desktop with `winget install -e --id Docker.DockerDesktop`, launch Docker Desktop, complete its setup, and reopen PowerShell so `docker --version` succeeds.
@@ -116,6 +124,41 @@ The durable PostgreSQL schema is defined by EF migration `20260827000000_Initial
    $env:ASPNETCORE_ENVIRONMENT = "LocalPostgres"
    dotnet run --project src/PowerliftingProgram.Api --urls http://localhost:5080
    ```
+
+### Open the Local PostgreSQL Database
+
+The PostgreSQL database is available only when the Docker container is running. Check its status from the repository root:
+
+```powershell
+docker compose ps
+```
+
+Open an interactive database prompt with:
+
+```powershell
+docker compose exec postgres psql -U powerlifting -d powerlifting_program
+```
+
+Useful `psql` commands:
+
+```sql
+\dt
+SELECT "Email", "DisplayName", "Role", "CoachId" FROM "PlatformUsers";
+SELECT "DisplayName", "CompetitionWeightClass" FROM "AthleteProfiles";
+\q
+```
+
+You can also connect using pgAdmin, DBeaver, or a PostgreSQL extension with these values:
+
+```text
+Host: localhost
+Port: 5432
+Database: powerlifting_program
+Username: powerlifting
+Password: powerlifting
+```
+
+The `Development` environment uses an EF Core in-memory database instead. It cannot be opened with a database client and is cleared when the API process stops.
 
 ### Run the .NET API
 
@@ -158,7 +201,21 @@ The first client visit opens a development-only proxy login. Choose `Alex Morgan
 
 The client has a WatermelonDB schema at `client/src/data/watermelonSchema.ts` for the native local database hierarchy. The included static demo adapter uses AsyncStorage, which maps to browser local storage on the web. This makes the app deployable to GitHub Pages while maintaining the same snapshot and command-ledger contract used by the production synchronization path.
 
-### Key API Endpoints
+### Auth, Invite, and Programming Endpoints
+
+- `POST /api/auth/register`: registers an independent `COACH` or `ATHLETE`, or accepts a valid athlete invitation.
+- `POST /api/auth/login`: returns a JWT-backed account session.
+- `GET /api/auth/me`: returns the authenticated account.
+- `GET /api/auth/invitations/{token}`: validates an unexpired invitation for registration.
+- `POST /api/coach/athlete-invitations`: coach-only creation and branded email delivery of a 48-hour athlete invite.
+- `GET /api/coach/athletes`: coach-only roster limited to athletes linked to the requesting coach.
+- `GET|POST|PUT|DELETE /api/program-templates`: coach-owned master-template operations.
+- `POST /api/program-templates/{templateId}/assignments`: clones a template into one athlete's live training log.
+- `GET /api/live-training/current`: returns the authenticated athlete's active assigned log.
+- `GET /api/live-training/athletes/{athleteProfileId}`: coach-only active-log review for a linked athlete.
+- `PUT /api/live-training/days/{trainingDayId}`: coach-only live-day modification; never edits a master template.
+
+### Existing Training Endpoints
 
 - `POST /api/sync`: accepts 1 to 100 pending ledger commands and returns each processed/rejected outcome.
 - `POST /api/sync/logged-set`: validates and applies one completed or skipped set.
@@ -191,10 +248,12 @@ For a real deployment, host the API container on an ASP.NET-compatible service a
 
 ## Production Notes
 
-- Add authentication and authorization before exposing athlete data publicly; the scaffold deliberately keeps identity-provider choice outside the domain model.
+- Keep `Authentication__Jwt__SigningKey` in secret storage, use a random value of at least 32 characters, and rotate it on a regular production schedule.
+- Set `Email__Resend__ApiKey` and a verified `Email__Resend__From` address before sending production invitations.
 - Terminate TLS before the API and allow only trusted CORS origins.
 - Use database backups, health checks, and managed secret injection for the production PostgreSQL connection string.
 - Keep the unique `SyncCommands.CommandId` index intact. It is the server-side replay guard for offline mutations.
 - Instagram content availability and access are controlled by Instagram and the account owner. Store links only with consent and honor applicable privacy, athlete-data, and platform policies.
-#   P o w e r l i f t i n g P r o g r a m  
+#   P o w e r l i f t i n g P r o g r a m 
+ 
  

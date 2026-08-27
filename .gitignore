@@ -17,4 +17,5 @@ client/web-build/
 
 # OS and editor state
 .DS_Store
-.vscode/*.log
+.vscode/
+.vs/
