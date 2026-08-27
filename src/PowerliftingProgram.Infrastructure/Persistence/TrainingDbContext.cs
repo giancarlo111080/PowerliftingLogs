@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Domain.Entities;
 
@@ -22,8 +23,29 @@ public sealed class TrainingDbContext(DbContextOptions<TrainingDbContext> option
     public DbSet<SyncCommand> SyncCommands => Set<SyncCommand>();
     public DbSet<AthleteAchievement> AthleteAchievements => Set<AthleteAchievement>();
 
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        RefreshConcurrencyTokens();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        RefreshConcurrencyTokens();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(TrainingDbContext).Assembly);
+    }
+
+    private void RefreshConcurrencyTokens()
+    {
+        foreach (var entry in ChangeTracker.Entries<Entity>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified))
+        {
+            entry.Property(entity => entity.RowVersion).CurrentValue = RandomNumberGenerator.GetBytes(16);
+        }
     }
 }

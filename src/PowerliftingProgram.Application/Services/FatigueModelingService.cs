@@ -58,9 +58,13 @@ public sealed class FatigueModelingService : IFatigueModelingService
         var state = initialState ?? new LoadModelState(0m, 0m);
         var startDate = stressByDate.Count == 0 ? throughDate : stressByDate.Keys.Min();
 
-        for (var date = startDate; date <= throughDate; date = date.AddDays(1))
+        for (var date = startDate; ; date = date.AddDays(1))
         {
             state = AdvanceOneDay(state, stressByDate.GetValueOrDefault(date));
+            if (date == throughDate)
+            {
+                break;
+            }
         }
 
         var ratio = state.ChronicLoad <= 0m ? 0m : state.AcuteLoad / state.ChronicLoad;

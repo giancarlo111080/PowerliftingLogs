@@ -19,6 +19,9 @@ public sealed class PlatformUser : Entity
     public required string NormalizedEmail { get; set; }
     public required string DisplayName { get; set; }
     public required string PasswordHash { get; set; }
+    public string? PasswordResetTokenHash { get; set; }
+    public DateTimeOffset? PasswordResetExpiresAt { get; set; }
+    public int SessionVersion { get; set; }
     public PlatformRole Role { get; set; }
     public Guid? CoachId { get; set; }
 

@@ -10,6 +10,10 @@ if ("serviceWorker" in navigator) {
       return;
     }
 
-    navigator.serviceWorker.register("./sw.js");
+    const registrationScript = document.currentScript;
+    const workerUrl = registrationScript instanceof HTMLScriptElement
+      ? new URL("./sw.js", registrationScript.src)
+      : new URL("./sw.js", window.location.href);
+    navigator.serviceWorker.register(workerUrl.href, { scope: new URL("./", workerUrl).pathname });
   });
 }

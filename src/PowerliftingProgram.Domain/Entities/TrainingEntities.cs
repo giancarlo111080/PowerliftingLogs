@@ -1,5 +1,3 @@
-using System.ComponentModel.DataAnnotations;
-
 namespace PowerliftingProgram.Domain.Entities;
 
 public abstract class Entity
@@ -8,7 +6,6 @@ public abstract class Entity
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 
-    [Timestamp]
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 }
 

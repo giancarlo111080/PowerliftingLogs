@@ -15,5 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\PowerliftingProgram.Application\PowerliftingProgram.Application.csproj" />
+    <ProjectReference Include="..\..\src\PowerliftingProgram.Api\PowerliftingProgram.Api.csproj" />
+    <ProjectReference Include="..\..\src\PowerliftingProgram.Infrastructure\PowerliftingProgram.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

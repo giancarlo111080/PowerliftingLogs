@@ -36,6 +36,12 @@ public sealed class ProgramTemplatesController(
     TrainingDbContext database,
     CoachAccessService coachAccessService) : ControllerBase
 {
+    private const int MaxTemplateWeeks = 52;
+    private const int MaxDaysPerWeek = 7;
+    private const int MaxExercisesPerDay = 20;
+    private const int MaxSetsPerExercise = 20;
+    private const int MaxGeneratedSets = 5_000;
+
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<ProgramTemplateResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ProgramTemplateResponse>>> GetTemplates(CancellationToken cancellationToken)
@@ -233,9 +239,12 @@ public sealed class ProgramTemplatesController(
         {
             return day is null ? NotFound() : Forbid();
         }
-        if (string.IsNullOrWhiteSpace(update.Name) || string.IsNullOrWhiteSpace(update.Focus) || update.Exercises.Count == 0)
+        if (string.IsNullOrWhiteSpace(update.Name) || update.Name.Trim().Length > 160
+            || string.IsNullOrWhiteSpace(update.Focus) || update.Focus.Trim().Length > 160
+            || update.Exercises.Count is 0 or > MaxExercisesPerDay
+            || update.Exercises.Select(exercise => exercise.ExerciseId).Distinct().Count() != update.Exercises.Count)
         {
-            return BadRequest(new ProblemDetails { Title = "A live training day needs a name, focus, and at least one exercise." });
+            return BadRequest(new ProblemDetails { Title = $"A live training day needs a valid name, focus, and 1-{MaxExercisesPerDay} unique exercises." });
         }
 
         day.Name = update.Name.Trim();
@@ -249,9 +258,12 @@ public sealed class ProgramTemplatesController(
         foreach (var input in update.Exercises)
         {
             var exercise = day.Exercises.SingleOrDefault(candidate => candidate.Id == input.ExerciseId);
-            if (exercise is null || input.Sets < 1 || input.Repetitions < 1 || string.IsNullOrWhiteSpace(input.Name))
+            if (exercise is null || input.Sets is < 1 or > MaxSetsPerExercise || input.Repetitions is < 1 or > 100
+                || string.IsNullOrWhiteSpace(input.Name) || input.Name.Trim().Length > 160
+                || !Enum.IsDefined(input.ExerciseType) || !Enum.IsDefined(input.PrescriptionMode)
+                || !IsValidPrescription(input.PrescriptionMode, input.PrescriptionValue) || input.WeightUnit is not ("kg" or "lb"))
             {
-                return BadRequest(new ProblemDetails { Title = "Each live exercise must exist and contain valid volume." });
+                return BadRequest(new ProblemDetails { Title = $"Each live exercise must exist and contain valid volume of at most {MaxSetsPerExercise} sets and 100 repetitions." });
             }
             exercise.Name = input.Name.Trim();
             exercise.ExerciseType = input.ExerciseType;
@@ -300,11 +312,17 @@ public sealed class ProgramTemplatesController(
     {
         if (string.IsNullOrWhiteSpace(input.Name) || input.Name.Trim().Length > 160) ModelState.AddModelError(nameof(input.Name), "Template name is required and must be 160 characters or fewer.");
         if (string.IsNullOrWhiteSpace(input.Goal) || input.Goal.Trim().Length > 1_000) ModelState.AddModelError(nameof(input.Goal), "Coaching goal is required and must be 1,000 characters or fewer.");
+        if (input.Phase?.Trim().Length > 80) ModelState.AddModelError(nameof(input.Phase), "Training phase must be 80 characters or fewer.");
         if (input.TrainingDaysPerWeek is < 1 or > 7) ModelState.AddModelError(nameof(input.TrainingDaysPerWeek), "Training days per week must be between 1 and 7.");
-        if (input.Weeks.Count == 0) ModelState.AddModelError(nameof(input.Weeks), "A template needs at least one week.");
-        if (input.Weeks.GroupBy(week => week.WeekNumber).Any(group => group.Key < 1 || group.Count() != 1)) ModelState.AddModelError(nameof(input.Weeks), "Week numbers must be unique positive values.");
-        if (input.Weeks.SelectMany(week => week.Days).Any(day => day.DayNumber < 1 || string.IsNullOrWhiteSpace(day.Name) || string.IsNullOrWhiteSpace(day.Focus))) ModelState.AddModelError(nameof(input.Weeks), "Every day needs a positive position, name, and focus.");
-        if (input.Weeks.SelectMany(week => week.Days).SelectMany(day => day.Exercises).Any(exercise => string.IsNullOrWhiteSpace(exercise.Name) || exercise.Sets < 1 || exercise.Repetitions < 1 || exercise.PrescriptionValue < 0m || (exercise.WeightUnit != "kg" && exercise.WeightUnit != "lb"))) ModelState.AddModelError(nameof(input.Weeks), "Every exercise needs a name, volume, valid target, and kg or lb unit.");
+        if (input.Weeks.Count is 0 or > MaxTemplateWeeks) ModelState.AddModelError(nameof(input.Weeks), $"A template needs between 1 and {MaxTemplateWeeks} weeks.");
+        if (input.Weeks.GroupBy(week => week.WeekNumber).Any(group => group.Key is < 1 or > MaxTemplateWeeks || group.Count() != 1)) ModelState.AddModelError(nameof(input.Weeks), $"Week numbers must be unique and between 1 and {MaxTemplateWeeks}.");
+        if (input.Weeks.Any(week => string.IsNullOrWhiteSpace(week.Name) || week.Name.Trim().Length > 120 || week.Days.Count is 0 or > MaxDaysPerWeek)) ModelState.AddModelError(nameof(input.Weeks), $"Every week needs a name of at most 120 characters and between 1 and {MaxDaysPerWeek} days.");
+        if (input.Weeks.SelectMany(week => week.Days).Any(day => day.DayNumber is < 1 or > 7 || string.IsNullOrWhiteSpace(day.Name) || day.Name.Trim().Length > 160 || string.IsNullOrWhiteSpace(day.Focus) || day.Focus.Trim().Length > 160 || day.Exercises.Count is 0 or > MaxExercisesPerDay)) ModelState.AddModelError(nameof(input.Weeks), $"Every day needs a valid position, name, focus, and 1-{MaxExercisesPerDay} exercises.");
+        if (input.Weeks.Any(week => week.Days.GroupBy(day => day.DayNumber).Any(group => group.Count() != 1))) ModelState.AddModelError(nameof(input.Weeks), "Day numbers must be unique within each week.");
+        var exercises = input.Weeks.SelectMany(week => week.Days).SelectMany(day => day.Exercises).ToList();
+        if (input.Weeks.SelectMany(week => week.Days).Any(day => day.Exercises.GroupBy(exercise => exercise.SortOrder).Any(group => group.Key < 0 || group.Count() != 1))) ModelState.AddModelError(nameof(input.Weeks), "Exercise positions must be unique non-negative values within each day.");
+        if (exercises.Any(exercise => string.IsNullOrWhiteSpace(exercise.Name) || exercise.Name.Trim().Length > 160 || exercise.Sets is < 1 or > MaxSetsPerExercise || exercise.Repetitions is < 1 or > 100 || !Enum.IsDefined(exercise.ExerciseType) || !Enum.IsDefined(exercise.PrescriptionMode) || !IsValidPrescription(exercise.PrescriptionMode, exercise.PrescriptionValue) || exercise.WeightUnit is not ("kg" or "lb"))) ModelState.AddModelError(nameof(input.Weeks), $"Every exercise needs a valid name, target, unit, and volume of at most {MaxSetsPerExercise} sets and 100 repetitions.");
+        if (exercises.Sum(exercise => exercise.Sets) > MaxGeneratedSets) ModelState.AddModelError(nameof(input.Weeks), $"A template cannot generate more than {MaxGeneratedSets:N0} sets.");
     }
 
     private static ProgramTemplate BuildTemplate(ProgramTemplateInput input, Guid coachId)
@@ -382,12 +400,24 @@ public sealed class ProgramTemplatesController(
         _ => 0m
     };
 
+    private static bool IsValidPrescription(TemplatePrescriptionMode mode, decimal value) => mode switch
+    {
+        TemplatePrescriptionMode.Rpe => value is >= 1m and <= 10m,
+        TemplatePrescriptionMode.PercentageOfOneRepMax => value is > 0m and <= 100m,
+        TemplatePrescriptionMode.ExactLoad => value is >= 0m and <= 1_000m,
+        _ => false
+    };
+
     private static void AdjustLiveSets(PrescribedExercise exercise, int desiredSetCount, int repetitions, TemplatePrescriptionMode prescriptionMode, decimal prescriptionValue, string weightUnit, AthleteProfile athlete)
     {
         var existingSets = exercise.Sets.OrderBy(set => set.SetNumber).ToList();
         var targetLoadKg = ResolveTargetLoad(prescriptionMode, prescriptionValue, weightUnit, athlete, exercise.ExerciseType);
         foreach (var set in existingSets.Take(desiredSetCount))
         {
+            if (set.CompletionStatus == SetCompletionStatus.Skipped && set.CompletedAt is null && set.ActualLoadKg is null && set.ActualRepetitions is null)
+            {
+                set.CompletionStatus = SetCompletionStatus.Pending;
+            }
             set.TargetRepetitions = repetitions;
             set.TargetRpe = prescriptionMode == TemplatePrescriptionMode.Rpe ? prescriptionValue : 0m;
             set.TargetLoadKg = targetLoadKg;
@@ -396,8 +426,11 @@ public sealed class ProgramTemplatesController(
         }
         foreach (var set in existingSets.Skip(desiredSetCount))
         {
-            set.CompletionStatus = SetCompletionStatus.Skipped;
-            set.UpdatedAt = DateTimeOffset.UtcNow;
+            if (set.CompletionStatus == SetCompletionStatus.Pending)
+            {
+                set.CompletionStatus = SetCompletionStatus.Skipped;
+                set.UpdatedAt = DateTimeOffset.UtcNow;
+            }
         }
         for (var setNumber = existingSets.Count + 1; setNumber <= desiredSetCount; setNumber++)
         {

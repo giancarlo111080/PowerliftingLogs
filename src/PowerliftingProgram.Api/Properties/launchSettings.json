@@ -8,17 +8,17 @@
       "launchUrl": "scalar/v1",
       "applicationUrl": "http://localhost:5080",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "LocalPostgres"
       }
     },
-    "PowerliftingProgram.Api (Local PostgreSQL)": {
+    "PowerliftingProgram.Api (Temporary In-Memory)": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "launchUrl": "scalar/v1",
       "applicationUrl": "http://localhost:5080",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "LocalPostgres"
+        "ASPNETCORE_ENVIRONMENT": "Development"
       }
     }
   }

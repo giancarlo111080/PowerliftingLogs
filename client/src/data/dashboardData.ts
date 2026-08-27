@@ -1,24 +1,20 @@
 import type { PlatformProfile } from "../auth/AuthSessionContext";
-import type { WorkoutSnapshot } from "../types/training";
-
-export interface WorkoutProgress {
-  completedSets: number;
-  totalSets: number;
-  plannedTonnageKg: number;
-  completedTonnageKg: number;
-}
-
+import { getProgramAnalytics } from "./programAnalytics";
+import type { ProgramComment, ProgramDayLog, TrainingProgram } from "./programWorkspaceStore";
 export interface CoachAthleteInsight {
   athleteId: string;
-  readiness: number;
+  readiness: number | null;
   lastSession: string;
-  adherencePercent: number;
-  syncStatus: "Synced" | "Queued" | "Needs review";
-  plannedTonnageKg: number;
+  lastSessionAt: string | null;
+  adherencePercent: number | null;
+  syncStatus: "No program" | "Not started" | "In progress" | "Complete";
   completedTonnageKg: number;
-  attention: "Low readiness" | "New video" | "Pending work" | "On track";
+  plannedSets: number;
+  completedSets: number;
+  skippedSets: number;
+  activeProgramName: string | null;
+  attention: "No active program" | "Low readiness" | "New video" | "Pending work" | "On track";
 }
-
 export interface CoachReviewItem {
   id: string;
   athleteId: string;
@@ -26,107 +22,97 @@ export interface CoachReviewItem {
   lift: string;
   note: string;
   instagramUrl?: string;
-  status: "New video" | "Coach flag" | "Day comment";
+  status: "New video" | "Day comment";
 }
 
-export interface Achievement {
-  code: string;
-  title: string;
-  detail: string;
+function activeProgramFor(athleteId: string, programs: TrainingProgram[]) {
+  const athletePrograms = programs
+    .filter((program) => program.athleteId === athleteId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
 }
-
-const insightByAthleteId: Record<string, Omit<CoachAthleteInsight, "athleteId">> = {
-  "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9": {
-    readiness: 84,
-    lastSession: "Today, 16:18",
-    adherencePercent: 88,
-    syncStatus: "Needs review",
-    plannedTonnageKg: 5255,
-    completedTonnageKg: 2130,
-    attention: "New video"
-  },
-  "4ef9844a-37de-42f6-bd31-ad587265ee90": {
-    readiness: 58,
-    lastSession: "Yesterday, 18:42",
-    adherencePercent: 92,
-    syncStatus: "Synced",
-    plannedTonnageKg: 4120,
-    completedTonnageKg: 3790,
-    attention: "Low readiness"
-  },
-  "270e0142-a437-44bc-9dcd-dd43676fd4b0": {
-    readiness: 76,
-    lastSession: "2 days ago",
-    adherencePercent: 76,
-    syncStatus: "Queued",
-    plannedTonnageKg: 3680,
-    completedTonnageKg: 2800,
-    attention: "Pending work"
-  },
-  "f0be3194-989f-4a36-9c8f-9c27eaf7e3da": {
-    readiness: 89,
-    lastSession: "Today, 07:31",
-    adherencePercent: 96,
-    syncStatus: "Synced",
-    plannedTonnageKg: 5960,
-    completedTonnageKg: 5960,
-    attention: "On track"
+function formatLastSession(value: string | null) {
+  if (!value) {
+    return "Not started";
   }
-};
-
-export const achievements: Achievement[] = [
-  { code: "streak-6", title: "Six-day streak", detail: "Logged training across six consecutive days" },
-  { code: "squat-pr", title: "Squat PR", detail: "215 kg competition squat baseline" },
-  { code: "peak-ready", title: "Peak ready", detail: "Completed the prior block on schedule" }
-];
-
-export const coachReviewItems: CoachReviewItem[] = [
-  {
-    id: "review-alex-squat",
-    athleteId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9",
-    athleteName: "Alex Morgan",
-    lift: "Competition squat - set 1",
-    note: "Depth was consistent. Hold the brace through the walkout.",
-    instagramUrl: "https://www.instagram.com/reel/C9DemoSquat1/",
-    status: "New video"
-  },
-  {
-    id: "review-jordan-deadlift",
-    athleteId: "4ef9844a-37de-42f6-bd31-ad587265ee90",
-    athleteName: "Jordan Lee",
-    lift: "Deadlift top set",
-    note: "Readiness is below the block target. Confirm sleep and lower back status.",
-    status: "Coach flag"
-  },
-  {
-    id: "review-mina-message",
-    athleteId: "270e0142-a437-44bc-9dcd-dd43676fd4b0",
-    athleteName: "Mina Patel",
-    lift: "Bench volume",
-    note: "Asked whether the final two sets should move to tomorrow.",
-    status: "Day comment"
-  }
-];
-
-export function getWorkoutProgress(workout: WorkoutSnapshot): WorkoutProgress {
-  const sets = workout.day.exercises.flatMap((exercise) => exercise.sets);
-  const completed = sets.filter((set) => set.completionStatus === "done");
-  return {
-    completedSets: completed.length,
-    totalSets: sets.length,
-    plannedTonnageKg: sets.reduce((total, set) => total + set.targetLoadKg * set.targetRepetitions, 0),
-    completedTonnageKg: completed.reduce((total, set) => total + (set.actualLoadKg ?? set.targetLoadKg) * (set.actualRepetitions ?? set.targetRepetitions), 0)
-  };
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? "Logged" : timestamp.toLocaleDateString();
 }
 
-export function getCoachInsights(profiles: PlatformProfile[]): CoachAthleteInsight[] {
-  return profiles
-    .filter((profile) => profile.role === "ATHLETE")
-    .map((profile) => ({
+export function getCoachInsights(profiles: PlatformProfile[], programs: TrainingProgram[], dayLogs: ProgramDayLog[]): CoachAthleteInsight[] {
+  return profiles.filter((profile) => profile.role === "ATHLETE").map((profile) => {
+    const program = activeProgramFor(profile.id, programs);
+    const programLogs = program ? dayLogs.filter((dayLog) => dayLog.programId === program.id) : [];
+    const analytics = getProgramAnalytics(program, programLogs);
+    const lastSessionAt = programLogs.map((dayLog) => dayLog.updatedAt).sort((left, right) => right.localeCompare(left))[0] ?? null;
+    const hasVideo = programLogs.some((dayLog) => dayLog.sets.some((set) => set.instagramVideoUrl || set.videoAnalysis));
+    const handledSets = analytics.completedSets + analytics.skippedSets;
+    const syncStatus = !program ? "No program" : analytics.plannedSets > 0 && analytics.remainingSets === 0 ? "Complete" : handledSets > 0 ? "In progress" : "Not started";
+    const attention = !program ? "No active program" : analytics.currentReadinessScore < 65 ? "Low readiness" : hasVideo ? "New video" : analytics.remainingSets > 0 && handledSets > 0 ? "Pending work" : "On track";
+    return {
       athleteId: profile.id,
-      ...insightByAthleteId[profile.id]
-    }))
-    .filter((insight): insight is CoachAthleteInsight => Boolean(insight.readiness));
+      readiness: program ? analytics.currentReadinessScore : null,
+      lastSession: formatLastSession(lastSessionAt),
+      lastSessionAt,
+      adherencePercent: program ? analytics.adherencePercent : null,
+      syncStatus,
+      completedTonnageKg: analytics.completedTonnageKg,
+      plannedSets: analytics.plannedSets,
+      completedSets: analytics.completedSets,
+      skippedSets: analytics.skippedSets,
+      activeProgramName: program?.name ?? null,
+      attention
+    };
+  });
+}
+
+export function getCoachReviewItems(profiles: PlatformProfile[], programs: TrainingProgram[], dayLogs: ProgramDayLog[], comments: ProgramComment[]): CoachReviewItem[] {
+  const profileById = new Map(profiles.filter((profile) => profile.role === "ATHLETE").map((profile) => [profile.id, profile]));
+  const programById = new Map(programs.filter((program) => profileById.has(program.athleteId)).map((program) => [program.id, program]));
+  const items: CoachReviewItem[] = [];
+
+  for (const dayLog of dayLogs) {
+    const program = programById.get(dayLog.programId);
+    const athlete = program ? profileById.get(program.athleteId) : null;
+    const day = program?.weeks.flatMap((week) => week.days).find((candidate) => candidate.id === dayLog.dayId);
+    if (!program || !athlete || !day) {
+      continue;
+    }
+    for (const set of dayLog.sets) {
+      if (!set.instagramVideoUrl && !set.videoAnalysis) {
+        continue;
+      }
+      const exercise = day.exercises.find((candidate) => candidate.id === set.exerciseId);
+      items.push({
+        id: `${program.id}:${day.id}:${set.exerciseId}:${set.setNumber}:video`,
+        athleteId: athlete.id,
+        athleteName: athlete.displayName,
+        lift: `${exercise?.name ?? "Training set"} - set ${set.setNumber}`,
+        note: set.videoAnalysis ? `${set.videoAnalysis.estimatedRepetitions} repetitions detected with ${set.videoAnalysis.confidence} confidence.` : "Linked footage is ready for coach review.",
+        instagramUrl: set.instagramVideoUrl,
+        status: "New video"
+      });
+    }
+  }
+
+  for (const comment of comments.filter((candidate) => candidate.authorRole === "lifter")) {
+    const program = programById.get(comment.programId);
+    const athlete = program ? profileById.get(program.athleteId) : null;
+    if (!program || !athlete) {
+      continue;
+    }
+    const day = program.weeks.flatMap((week) => week.days).find((candidate) => candidate.id === comment.dayId);
+    items.push({
+      id: comment.id,
+      athleteId: athlete.id,
+      athleteName: athlete.displayName,
+      lift: day?.name ?? "Training day",
+      note: comment.body,
+      status: "Day comment"
+    });
+  }
+
+  return items;
 }
 
 export function formatTonnage(value: number): string {

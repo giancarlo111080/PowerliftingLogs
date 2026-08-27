@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Application.Contracts;
 using PowerliftingProgram.Application.Services;
@@ -8,34 +10,42 @@ using PowerliftingProgram.Infrastructure.Persistence;
 namespace PowerliftingProgram.Infrastructure.Services;
 
 public sealed record SyncCommandOutcome(Guid CommandId, SyncCommandStatus Status, string? RejectionReason);
+public sealed record SyncActor(Guid UserId, string DisplayName, bool IsCoach);
 
 public sealed class WorkoutSyncService(
     TrainingDbContext database,
-    IGamificationService gamificationService)
+    IGamificationService gamificationService,
+    IValidator<LoggedSetRequest> loggedSetValidator,
+    InstagramVideoUrlPolicy instagramVideoUrlPolicy)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public async Task<IReadOnlyList<SyncCommandOutcome>> ProcessAsync(
         IEnumerable<SyncCommandRequest> commands,
+        SyncActor actor,
         CancellationToken cancellationToken)
     {
         var outcomes = new List<SyncCommandOutcome>();
 
         foreach (var command in commands.OrderBy(item => item.CreatedAt))
         {
-            outcomes.Add(await ProcessOneAsync(command, cancellationToken));
+            outcomes.Add(await ProcessOneAsync(command, actor, cancellationToken));
         }
 
         return outcomes;
     }
 
-    private async Task<SyncCommandOutcome> ProcessOneAsync(SyncCommandRequest command, CancellationToken cancellationToken)
+    private async Task<SyncCommandOutcome> ProcessOneAsync(SyncCommandRequest command, SyncActor actor, CancellationToken cancellationToken)
     {
         var existing = await database.SyncCommands
             .AsNoTracking()
             .SingleOrDefaultAsync(item => item.CommandId == command.CommandId, cancellationToken);
         if (existing is not null)
         {
+            if (existing.AthleteProfileId != command.AthleteProfileId)
+            {
+                return new SyncCommandOutcome(command.CommandId, SyncCommandStatus.Rejected, "The command ID is already used by another athlete.");
+            }
             return new SyncCommandOutcome(existing.CommandId, existing.Status, existing.RejectionReason);
         }
 
@@ -66,7 +76,7 @@ public sealed class WorkoutSyncService(
                     await ApplyInstagramVideoLinkAsync(command, cancellationToken);
                     break;
                 case "add-comment":
-                    ApplyComment(command);
+                    await ApplyCommentAsync(command, actor, cancellationToken);
                     break;
                 default:
                     throw new InvalidOperationException($"Unsupported sync command type '{command.CommandType}'.");
@@ -96,6 +106,13 @@ public sealed class WorkoutSyncService(
                 return new SyncCommandOutcome(duplicate.CommandId, duplicate.Status, duplicate.RejectionReason);
             }
 
+            var rejectionReason = exception switch
+            {
+                JsonException => "The sync command payload is invalid.",
+                DbUpdateConcurrencyException => "The training data changed in another request. Refresh and try again.",
+                DbUpdateException => "The sync command conflicts with the current training data.",
+                _ => exception.Message
+            };
             var rejected = new SyncCommand
             {
                 CommandId = command.CommandId,
@@ -106,7 +123,7 @@ public sealed class WorkoutSyncService(
                 DeviceId = command.DeviceId,
                 Status = SyncCommandStatus.Rejected,
                 ProcessedAt = DateTimeOffset.UtcNow,
-                RejectionReason = exception.Message[..Math.Min(exception.Message.Length, 1_000)]
+                RejectionReason = rejectionReason[..Math.Min(rejectionReason.Length, 1_000)]
             };
             database.SyncCommands.Add(rejected);
             await database.SaveChangesAsync(cancellationToken);
@@ -117,15 +134,28 @@ public sealed class WorkoutSyncService(
     private async Task ApplyLoggedSetAsync(SyncCommandRequest command, CancellationToken cancellationToken)
     {
         var request = Deserialize<LoggedSetRequest>(command.PayloadJson);
-        if (request.IdempotencyKey != command.CommandId || request.TrainingSetId != command.AggregateId)
+        if (request.IdempotencyKey != command.CommandId || request.TrainingSetId != command.AggregateId || request.AthleteProfileId != command.AthleteProfileId)
         {
             throw new InvalidOperationException("The logged set identity does not match the sync command.");
+        }
+        if ((command.CommandType == "log-set") != (request.CompletionStatus == SetCompletionStatus.Done)
+            || (command.CommandType == "skip-set") != (request.CompletionStatus == SetCompletionStatus.Skipped))
+        {
+            throw new InvalidOperationException("The logged set status does not match the sync command type.");
+        }
+        var validation = await loggedSetValidator.ValidateAsync(request, cancellationToken);
+        if (!validation.IsValid)
+        {
+            throw new InvalidOperationException(string.Join(" ", validation.Errors.Select(error => error.ErrorMessage).Distinct()));
         }
 
         var trainingSet = await database.TrainingSets
             .Include(set => set.PrescribedExercise)
             .ThenInclude(exercise => exercise!.TrainingDay)
-            .SingleOrDefaultAsync(set => set.Id == request.TrainingSetId, cancellationToken)
+            .ThenInclude(day => day!.TrainingWeek)
+            .ThenInclude(week => week!.TrainingBlock)
+            .SingleOrDefaultAsync(set => set.Id == request.TrainingSetId
+                && set.PrescribedExercise!.TrainingDay!.TrainingWeek!.TrainingBlock!.AthleteProfileId == command.AthleteProfileId, cancellationToken)
             ?? throw new InvalidOperationException("The training set was not found.");
         if (trainingSet.PrescribedExercise?.TrainingDay is null)
         {
@@ -136,20 +166,33 @@ public sealed class WorkoutSyncService(
             .SingleOrDefaultAsync(profile => profile.Id == request.AthleteProfileId, cancellationToken)
             ?? throw new InvalidOperationException("The athlete profile was not found.");
 
+        var wasCompleted = trainingSet.CompletionStatus == SetCompletionStatus.Done;
+        var wasRewarded = trainingSet.CompletedAt is not null;
+        var previousTonnage = wasCompleted
+            ? (trainingSet.ActualLoadKg ?? 0m) * (trainingSet.ActualRepetitions ?? 0)
+            : 0m;
         trainingSet.CompletionStatus = request.CompletionStatus;
-        trainingSet.ActualLoadKg = request.ActualLoadKg;
-        trainingSet.ActualRepetitions = request.ActualRepetitions;
-        trainingSet.ActualRpe = request.ActualRpe;
-        trainingSet.ActualEstimatedOneRepMaxKg = request.ActualEstimatedOneRepMaxKg;
-        trainingSet.ActualEffortPercentage = request.ActualEffortPercentage;
+        trainingSet.ActualLoadKg = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualLoadKg : null;
+        trainingSet.ActualRepetitions = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualRepetitions : null;
+        trainingSet.ActualRpe = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualRpe : null;
+        trainingSet.ActualEstimatedOneRepMaxKg = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualEstimatedOneRepMaxKg : null;
+        trainingSet.ActualEffortPercentage = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualEffortPercentage : null;
         trainingSet.InstagramVideoUrl = request.InstagramVideoUrl;
         trainingSet.AthleteNote = request.AthleteNote;
-        trainingSet.CompletedAt = request.CompletionStatus == SetCompletionStatus.Done ? DateTimeOffset.UtcNow : null;
+        if (request.CompletionStatus == SetCompletionStatus.Done && trainingSet.CompletedAt is null)
+        {
+            trainingSet.CompletedAt = DateTimeOffset.UtcNow;
+        }
         trainingSet.UpdatedAt = DateTimeOffset.UtcNow;
 
-        if (request.CompletionStatus == SetCompletionStatus.Done)
+        var currentTonnage = request.CompletionStatus == SetCompletionStatus.Done
+            ? (request.ActualLoadKg ?? 0m) * (request.ActualRepetitions ?? 0)
+            : 0m;
+        athlete.CumulativeWorkingSetTonnageKg = Math.Max(0m,
+            athlete.CumulativeWorkingSetTonnageKg - previousTonnage + currentTonnage);
+
+        if (request.CompletionStatus == SetCompletionStatus.Done && !wasRewarded)
         {
-            athlete.CumulativeWorkingSetTonnageKg += (request.ActualLoadKg ?? 0m) * (request.ActualRepetitions ?? 0);
             var isPersonalRecord = request.ActualEstimatedOneRepMaxKg is > 0m
                 && request.ActualEstimatedOneRepMaxKg > ResolveOneRepMax(athlete, trainingSet.PrescribedExercise.ExerciseType);
             gamificationService.AwardLoggedSet(athlete, trainingSet, isPersonalRecord);
@@ -163,18 +206,57 @@ public sealed class WorkoutSyncService(
         {
             throw new InvalidOperationException("The Instagram video identity does not match the sync command.");
         }
+        if (string.IsNullOrWhiteSpace(request.InstagramVideoUrl) || request.InstagramVideoUrl.Length > 2_048 || !instagramVideoUrlPolicy.IsAllowed(request.InstagramVideoUrl)
+            || request.AthleteNote?.Length > 2_000 || request.CoachFormFlags?.Length > 2_000)
+        {
+            throw new InvalidOperationException("The Instagram video link or notes are invalid.");
+        }
 
-        var trainingSet = await database.TrainingSets.SingleOrDefaultAsync(set => set.Id == request.TrainingSetId, cancellationToken)
+        var trainingSet = await database.TrainingSets
+            .Include(set => set.PrescribedExercise)
+            .ThenInclude(exercise => exercise!.TrainingDay)
+            .ThenInclude(day => day!.TrainingWeek)
+            .ThenInclude(week => week!.TrainingBlock)
+            .SingleOrDefaultAsync(set => set.Id == request.TrainingSetId
+                && set.PrescribedExercise!.TrainingDay!.TrainingWeek!.TrainingBlock!.AthleteProfileId == command.AthleteProfileId, cancellationToken)
             ?? throw new InvalidOperationException("The training set was not found.");
-        trainingSet.InstagramVideoUrl = request.InstagramVideoUrl;
+        trainingSet.InstagramVideoUrl = request.InstagramVideoUrl.Trim();
         trainingSet.AthleteNote = request.AthleteNote;
         trainingSet.CoachFormFlags = request.CoachFormFlags;
         trainingSet.UpdatedAt = DateTimeOffset.UtcNow;
     }
 
-    private void ApplyComment(SyncCommandRequest command)
+    private async Task ApplyCommentAsync(SyncCommandRequest command, SyncActor actor, CancellationToken cancellationToken)
     {
         var request = Deserialize<CommentRequest>(command.PayloadJson);
+        if (request.AthleteProfileId != command.AthleteProfileId)
+        {
+            throw new InvalidOperationException("The comment athlete does not match the sync command.");
+        }
+        var targetId = request.ContextType switch
+        {
+            CommentContextType.TrainingDay when request.TrainingDayId is Guid id && request.PrescribedExerciseId is null && request.TrainingSetId is null => id,
+            CommentContextType.Exercise when request.TrainingDayId is null && request.PrescribedExerciseId is Guid id && request.TrainingSetId is null => id,
+            CommentContextType.Set when request.TrainingDayId is null && request.PrescribedExerciseId is null && request.TrainingSetId is Guid id => id,
+            _ => Guid.Empty
+        };
+        if (targetId == Guid.Empty || targetId != command.AggregateId
+            || string.IsNullOrWhiteSpace(request.Subject) || request.Subject.Trim().Length > 200
+            || string.IsNullOrWhiteSpace(request.Message) || request.Message.Trim().Length > 5_000)
+        {
+            throw new InvalidOperationException("The comment context, subject, or message is invalid.");
+        }
+        var contextExists = request.ContextType switch
+        {
+            CommentContextType.TrainingDay when request.TrainingDayId is Guid trainingDayId => await database.TrainingDays.AnyAsync(day => day.Id == trainingDayId && day.TrainingWeek!.TrainingBlock!.AthleteProfileId == command.AthleteProfileId, cancellationToken),
+            CommentContextType.Exercise when request.PrescribedExerciseId is Guid exerciseId => await database.PrescribedExercises.AnyAsync(exercise => exercise.Id == exerciseId && exercise.TrainingDay!.TrainingWeek!.TrainingBlock!.AthleteProfileId == command.AthleteProfileId, cancellationToken),
+            CommentContextType.Set when request.TrainingSetId is Guid trainingSetId => await database.TrainingSets.AnyAsync(set => set.Id == trainingSetId && set.PrescribedExercise!.TrainingDay!.TrainingWeek!.TrainingBlock!.AthleteProfileId == command.AthleteProfileId, cancellationToken),
+            _ => false
+        };
+        if (!contextExists)
+        {
+            throw new InvalidOperationException("The comment target was not found for this athlete.");
+        }
         var thread = new CommentThread
         {
             AthleteProfileId = request.AthleteProfileId,
@@ -182,14 +264,14 @@ public sealed class WorkoutSyncService(
             PrescribedExerciseId = request.PrescribedExerciseId,
             TrainingSetId = request.TrainingSetId,
             ContextType = request.ContextType,
-            Subject = request.Subject
+            Subject = request.Subject.Trim()
         };
         thread.Comments.Add(new ThreadComment
         {
-            AuthorUserId = request.AuthorUserId,
-            AuthorDisplayName = request.AuthorDisplayName,
-            Message = request.Message,
-            IsCoachComment = request.IsCoachComment
+            AuthorUserId = actor.UserId.ToString(),
+            AuthorDisplayName = actor.DisplayName,
+            Message = request.Message.Trim(),
+            IsCoachComment = actor.IsCoach
         });
         database.CommentThreads.Add(thread);
     }
@@ -197,6 +279,13 @@ public sealed class WorkoutSyncService(
     private static T Deserialize<T>(string payloadJson) =>
         JsonSerializer.Deserialize<T>(payloadJson, JsonOptions)
         ?? throw new JsonException("Sync command payload is empty.");
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     private static decimal ResolveOneRepMax(AthleteProfile athlete, ExerciseType exerciseType) => exerciseType switch
     {

@@ -23,8 +23,15 @@ public sealed class TrainingAnalyticsController(
 {
     [HttpPost("working-sets")]
     [ProducesResponseType(typeof(IReadOnlyList<WorkingSetTarget>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public ActionResult<IReadOnlyList<WorkingSetTarget>> CalculateWorkingSets([FromBody] WorkingSetCalculationRequest request)
     {
+        if (request.EstimatedOneRepMaxKg is <= 0m or > 1_200m) ModelState.AddModelError(nameof(request.EstimatedOneRepMaxKg), "Estimated one-rep max must be between 0 and 1,200 kg.");
+        if (request.Sets is < 1 or > 20) ModelState.AddModelError(nameof(request.Sets), "Set count must be between 1 and 20.");
+        if (request.Repetitions is < 1 or > 100) ModelState.AddModelError(nameof(request.Repetitions), "Repetitions must be between 1 and 100.");
+        if (request.TargetRpe is < 1m or > 10m) ModelState.AddModelError(nameof(request.TargetRpe), "Target RPE must be between 1 and 10.");
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
         return Ok(calculationService.CalculateWorkingSets(
             request.EstimatedOneRepMaxKg,
             request.Sets,
@@ -34,8 +41,14 @@ public sealed class TrainingAnalyticsController(
 
     [HttpPost("warm-ups")]
     [ProducesResponseType(typeof(IReadOnlyList<WarmUpSet>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public ActionResult<IReadOnlyList<WarmUpSet>> CalculateWarmUps([FromBody] WarmUpCalculationRequest request)
     {
+        if (request.WorkingLoadKg is <= 0m or > 1_200m) ModelState.AddModelError(nameof(request.WorkingLoadKg), "Working load must be between 0 and 1,200 kg.");
+        if (request.BarbellKg is <= 0m or > 100m) ModelState.AddModelError(nameof(request.BarbellKg), "Barbell weight must be between 0 and 100 kg.");
+        if (request.PlateIncrementKg is < 0.25m or > 25m) ModelState.AddModelError(nameof(request.PlateIncrementKg), "Plate increment must be between 0.25 and 25 kg.");
+        if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
         return Ok(calculationService.CalculateWarmUps(request.WorkingLoadKg, request.BarbellKg, request.PlateIncrementKg));
     }
 
@@ -47,6 +60,12 @@ public sealed class TrainingAnalyticsController(
         [FromQuery] DateOnly? throughDate,
         CancellationToken cancellationToken)
     {
+        var requestedDate = throughDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        if (requestedDate > DateOnly.FromDateTime(DateTime.UtcNow).AddYears(1))
+        {
+            ModelState.AddModelError(nameof(throughDate), "Readiness can be forecast at most one year ahead.");
+            return ValidationProblem(ModelState);
+        }
         if (!await coachAccessService.CanAccessAthleteAsync(User, athleteId, cancellationToken))
         {
             return Forbid();
@@ -72,7 +91,7 @@ public sealed class TrainingAnalyticsController(
             set.ActualEffortPercentage ?? 0.7m,
             set.PrescribedExercise.ExerciseTypeModifier));
 
-        return Ok(fatigueModelingService.CalculateReadiness(observations, throughDate ?? DateOnly.FromDateTime(DateTime.UtcNow)));
+        return Ok(fatigueModelingService.CalculateReadiness(observations, requestedDate));
     }
 
     [HttpGet("days/{trainingDayId:guid}/analytics")]
@@ -83,6 +102,21 @@ public sealed class TrainingAnalyticsController(
         [FromQuery] decimal athleteOneRepMaxKg,
         CancellationToken cancellationToken)
     {
+        if (athleteOneRepMaxKg is <= 0m or > 1_200m)
+        {
+            ModelState.AddModelError(nameof(athleteOneRepMaxKg), "Athlete one-rep max must be between 0 and 1,200 kg.");
+            return ValidationProblem(ModelState);
+        }
+        var athleteId = await database.TrainingDays
+            .AsNoTracking()
+            .Where(day => day.Id == trainingDayId)
+            .Select(day => (Guid?)day.TrainingWeek!.TrainingBlock!.AthleteProfileId)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (athleteId is null || !await coachAccessService.CanAccessAthleteAsync(User, athleteId.Value, cancellationToken))
+        {
+            return NotFound();
+        }
+
         var trainingDay = await database.TrainingDays
             .AsNoTracking()
             .Include(day => day.TrainingWeek)
@@ -93,10 +127,6 @@ public sealed class TrainingAnalyticsController(
         if (trainingDay is null)
         {
             return NotFound();
-        }
-        if (!await coachAccessService.CanAccessAthleteAsync(User, trainingDay.TrainingWeek!.TrainingBlock!.AthleteProfileId, cancellationToken))
-        {
-            return Forbid();
         }
 
         return Ok(calculationService.CalculateSessionAnalytics(trainingDay, athleteOneRepMaxKg));

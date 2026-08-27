@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
+
+import { isLiftVideoAnalysis, type LiftVideoAnalysis } from "../lib/liftAnalysis";
+import { isStaticDemo } from "../lib/platformApi";
 
 export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
 export type ProgramStatus = "draft" | "active" | "completed";
@@ -57,6 +60,7 @@ export interface ProgramDaySetLog {
   actualWeight?: number;
   weightUnit?: WeightUnit;
   instagramVideoUrl?: string;
+  videoAnalysis?: LiftVideoAnalysis;
 }
 
 export interface ProgramDayLog {
@@ -147,14 +151,26 @@ interface ProgramWorkspaceStore {
   deleteExercise: (programId: string, weekId: string, dayId: string, exerciseId: string) => Promise<void>;
   logDaySet: (programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) => Promise<void>;
   updateDaySetInstagramLink: (programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) => Promise<void>;
+  updateDaySetVideoAnalysis: (programId: string, dayId: string, exerciseId: string, setNumber: number, videoAnalysis: LiftVideoAnalysis) => Promise<void>;
   updateDayRating: (programId: string, dayId: string, sessionRating: number | null) => Promise<void>;
   addComment: (comment: Omit<ProgramComment, "id" | "createdAt">) => Promise<void>;
 }
 
-const programStorageKey = "powerlifting-program/coach-programs";
+interface ProgramWorkspaceSnapshot {
+  programs: TrainingProgram[];
+  templates: ProgramTemplate[];
+  comments: ProgramComment[];
+  dayLogs: ProgramDayLog[];
+  isLoading: boolean;
+}
+
+const programStorageKey = "iron-forge/coach-programs";
 const templateStorageKey = "iron-forge/program-templates";
-const commentStorageKey = "powerlifting-program/program-day-comments";
-const dayLogStorageKey = "powerlifting-program/program-day-logs";
+const commentStorageKey = "iron-forge/program-day-comments";
+const dayLogStorageKey = "iron-forge/program-day-logs";
+const legacyProgramStorageKey = "powerlifting-program/coach-programs";
+const legacyCommentStorageKey = "powerlifting-program/program-day-comments";
+const legacyDayLogStorageKey = "powerlifting-program/program-day-logs";
 const workspaceListeners = new Set<() => void>();
 
 function notifyWorkspaceListeners() {
@@ -206,16 +222,24 @@ function createWeek(weekNumber: number, name = `Week ${weekNumber}`): ProgramWee
   return { id: createId("week"), weekNumber, name, days: [] };
 }
 
-function seedWeeks(days: ProgramDay[], startDate: string): ProgramWeek[] {
+function seedWeeks(days: ProgramDay[], startDate: string, seedPrefix?: string): ProgramWeek[] {
+  const seededDays = days.map((day, dayIndex) => ({
+    ...day,
+    id: seedPrefix ? `${seedPrefix}-day-${dayIndex + 1}` : day.id,
+    exercises: day.exercises.map((exercise, exerciseIndex) => ({
+      ...exercise,
+      id: seedPrefix ? `${seedPrefix}-day-${dayIndex + 1}-exercise-${exerciseIndex + 1}` : exercise.id
+    }))
+  }));
   return [
-    { id: createId("week"), weekNumber: 1, name: "Week 1", days: days.map((day, index) => ({ ...day, sequence: index + 1, scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(startDate, index), scheduleUpdatedBy: "coach", scheduleUpdatedAt: new Date().toISOString() })) },
-    { id: createId("week"), weekNumber: 2, name: "Week 2", days: [] },
-    { id: createId("week"), weekNumber: 3, name: "Week 3", days: [] },
-    { id: createId("week"), weekNumber: 4, name: "Week 4", days: [] }
+    { id: seedPrefix ? `${seedPrefix}-week-1` : createId("week"), weekNumber: 1, name: "Week 1", days: seededDays.map((day, index) => ({ ...day, sequence: index + 1, scheduledDate: isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(startDate, index), scheduleUpdatedBy: "coach", scheduleUpdatedAt: seedPrefix ? `${startDate}T00:00:00.000Z` : new Date().toISOString() })) },
+    { id: seedPrefix ? `${seedPrefix}-week-2` : createId("week"), weekNumber: 2, name: "Week 2", days: [] },
+    { id: seedPrefix ? `${seedPrefix}-week-3` : createId("week"), weekNumber: 3, name: "Week 3", days: [] },
+    { id: seedPrefix ? `${seedPrefix}-week-4` : createId("week"), weekNumber: 4, name: "Week 4", days: [] }
   ];
 }
 
-const initialPrograms: TrainingProgram[] = [
+const demoPrograms: TrainingProgram[] = [
   {
     id: "program-alex-peak",
     athleteId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9",
@@ -237,48 +261,108 @@ const initialPrograms: TrainingProgram[] = [
         createExercise("deadlift", "Competition Deadlift"),
         createExercise("accessory", "Lat Pulldown")
       ])
-    ], "2026-08-03")
-  },
-  {
-    id: "program-jordan-strength",
-    athleteId: "4ef9844a-37de-42f6-bd31-ad587265ee90",
-    name: "Regional Qualifier Strength",
-    phase: "Strength",
-    goal: "Increase top-set confidence while managing recovery.",
-    startDate: "2026-08-17",
-    endDate: "2026-09-13",
-    trainingDaysPerWeek: 3,
-    status: "active",
-    updatedAt: "2026-08-26T18:42:00.000Z",
-    weeks: seedWeeks([createDay("Day 1", "Squat and close-grip bench", [createExercise("squat", "Low-Bar Squat"), createExercise("bench", "Close-Grip Bench Press")])], "2026-08-17")
-  },
-  {
-    id: "program-mina-hypertrophy",
-    athleteId: "270e0142-a437-44bc-9dcd-dd43676fd4b0",
-    name: "Hypertrophy Accumulation",
-    phase: "Hypertrophy",
-    goal: "Add upper-back and bench volume before the next strength block.",
-    startDate: "2026-07-27",
-    endDate: "2026-08-30",
-    trainingDaysPerWeek: 4,
-    status: "active",
-    updatedAt: "2026-08-25T19:15:00.000Z",
-    weeks: seedWeeks([createDay("Day 1", "Tempo squat and bench volume", [createExercise("squat", "Tempo Squat"), createExercise("bench", "Bench Press"), createExercise("accessory", "Chest-Supported Row")])], "2026-07-27")
-  },
-  {
-    id: "program-sam-peak",
-    athleteId: "f0be3194-989f-4a36-9c8f-9c27eaf7e3da",
-    name: "City Open Peak",
-    phase: "Peak",
-    goal: "Practice competition commands and reduce accessory fatigue.",
-    startDate: "2026-08-10",
-    endDate: "2026-09-06",
-    trainingDaysPerWeek: 4,
-    status: "active",
-    updatedAt: "2026-08-27T07:31:00.000Z",
-    weeks: seedWeeks([createDay("Day 1", "Competition lifts", [createExercise("squat"), createExercise("bench", "Spoto Press"), createExercise("deadlift")])], "2026-08-10")
+    ], "2026-08-03", "program-alex-peak")
   }
 ];
+
+const legacyDemoProgramIds = new Set(["program-alex-peak", "program-jordan-strength", "program-mina-hypertrophy", "program-sam-peak"]);
+const fallbackPrograms = isStaticDemo ? demoPrograms : [];
+
+let programs = fallbackPrograms;
+let templates: ProgramTemplate[] = [];
+let comments: ProgramComment[] = [];
+let dayLogs: ProgramDayLog[] = [];
+let isLoading = true;
+let workspaceSnapshot: ProgramWorkspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
+let workspaceRestorePromise: Promise<void> | null = null;
+let workspaceWriteQueue = Promise.resolve();
+
+function publishWorkspaceSnapshot() {
+  workspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
+  notifyWorkspaceListeners();
+}
+
+function subscribeToWorkspace(listener: () => void) {
+  workspaceListeners.add(listener);
+  return () => workspaceListeners.delete(listener);
+}
+
+function getWorkspaceSnapshot() {
+  return workspaceSnapshot;
+}
+
+function restoreItems<T>(serialized: string | null, normalize: (value: unknown) => T | null, fallback: T[]): T[] {
+  if (!serialized) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(serialized) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.map(normalize).filter((item): item is T => item !== null)
+      : fallback;
+  }
+  catch {
+    return fallback;
+  }
+}
+
+async function readMigratedWorkspaceItem(key: string, legacyKey?: string) {
+  const storedValue = await AsyncStorage.getItem(key);
+  if (storedValue !== null || !legacyKey) {
+    return storedValue;
+  }
+  const legacyValue = await AsyncStorage.getItem(legacyKey);
+  if (legacyValue !== null) {
+    await AsyncStorage.setItem(key, legacyValue);
+    await AsyncStorage.removeItem(legacyKey);
+  }
+  return legacyValue;
+}
+
+async function restoreWorkspace() {
+  try {
+    const [storedPrograms, storedTemplates, storedComments, storedDayLogs] = await Promise.all([
+      readMigratedWorkspaceItem(programStorageKey, legacyProgramStorageKey),
+      readMigratedWorkspaceItem(templateStorageKey),
+      readMigratedWorkspaceItem(commentStorageKey, legacyCommentStorageKey),
+      readMigratedWorkspaceItem(dayLogStorageKey, legacyDayLogStorageKey)
+    ]);
+    const restoredPrograms = restoreItems(storedPrograms, normalizeProgram, fallbackPrograms);
+    programs = restoredPrograms.filter((program) => isStaticDemo ? program.id === "program-alex-peak" || !legacyDemoProgramIds.has(program.id) : !legacyDemoProgramIds.has(program.id));
+    templates = restoreItems(storedTemplates, normalizeTemplate, []);
+    const retainedProgramIds = new Set(programs.map((program) => program.id));
+    const restoredComments = restoreItems(storedComments, (value) => isComment(value) ? value : null, []);
+    const restoredDayLogs = restoreItems(storedDayLogs, (value) => isDayLog(value) ? value : null, []);
+    comments = restoredComments.filter((comment) => retainedProgramIds.has(comment.programId));
+    dayLogs = restoredDayLogs.filter((dayLog) => retainedProgramIds.has(dayLog.programId));
+    const cleanupWrites: Promise<void>[] = [];
+    if (storedPrograms !== null && programs.length !== restoredPrograms.length) cleanupWrites.push(AsyncStorage.setItem(programStorageKey, JSON.stringify(programs)));
+    if (storedComments !== null && comments.length !== restoredComments.length) cleanupWrites.push(AsyncStorage.setItem(commentStorageKey, JSON.stringify(comments)));
+    if (storedDayLogs !== null && dayLogs.length !== restoredDayLogs.length) cleanupWrites.push(AsyncStorage.setItem(dayLogStorageKey, JSON.stringify(dayLogs)));
+    await Promise.all(cleanupWrites).catch(() => undefined);
+  }
+  catch {
+    programs = fallbackPrograms;
+    templates = [];
+    comments = [];
+    dayLogs = [];
+  }
+  finally {
+    isLoading = false;
+    publishWorkspaceSnapshot();
+  }
+}
+
+function ensureWorkspaceLoaded() {
+  workspaceRestorePromise ??= restoreWorkspace();
+  return workspaceRestorePromise;
+}
+
+function writeWorkspaceItem(key: string, value: string) {
+  const write = workspaceWriteQueue.then(() => AsyncStorage.setItem(key, value));
+  workspaceWriteQueue = write.catch(() => undefined);
+  return write;
+}
 
 function isProgramStatus(value: unknown): value is ProgramStatus {
   return value === "draft" || value === "active" || value === "completed";
@@ -385,7 +469,8 @@ function isDayLog(value: unknown): value is ProgramDayLog {
       (set.completedAt === undefined || typeof set.completedAt === "string") &&
       (set.actualWeight === undefined || (typeof set.actualWeight === "number" && Number.isFinite(set.actualWeight) && set.actualWeight > 0)) &&
       (set.weightUnit === undefined || set.weightUnit === "kg" || set.weightUnit === "lb") &&
-      (set.instagramVideoUrl === undefined || typeof set.instagramVideoUrl === "string")) &&
+      (set.instagramVideoUrl === undefined || typeof set.instagramVideoUrl === "string") &&
+      (set.videoAnalysis === undefined || isLiftVideoAnalysis(set.videoAnalysis))) &&
     (candidate.sessionRating === undefined || (Number.isInteger(candidate.sessionRating) && candidate.sessionRating >= 1 && candidate.sessionRating <= 10)) &&
     (candidate.ratedAt === undefined || typeof candidate.ratedAt === "string");
 }
@@ -395,113 +480,78 @@ function updateProgramStructure(program: TrainingProgram, weekId: string, change
 }
 
 export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
-  const [programs, setPrograms] = useState<TrainingProgram[]>(initialPrograms);
-  const [templates, setTemplates] = useState<ProgramTemplate[]>([]);
-  const [comments, setComments] = useState<ProgramComment[]>([]);
-  const [dayLogs, setDayLogs] = useState<ProgramDayLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const snapshot = useSyncExternalStore(subscribeToWorkspace, getWorkspaceSnapshot, getWorkspaceSnapshot);
 
   useEffect(() => {
-    let isMounted = true;
-    async function restoreWorkspace() {
-      try {
-        const [storedPrograms, storedTemplates, storedComments, storedDayLogs] = await Promise.all([
-          AsyncStorage.getItem(programStorageKey),
-          AsyncStorage.getItem(templateStorageKey),
-          AsyncStorage.getItem(commentStorageKey),
-          AsyncStorage.getItem(dayLogStorageKey)
-        ]);
-        if (!isMounted) {
-          return;
-        }
-        if (storedPrograms) {
-          const parsedPrograms = JSON.parse(storedPrograms) as unknown;
-          if (Array.isArray(parsedPrograms)) {
-            const normalizedPrograms = parsedPrograms.map(normalizeProgram).filter((program): program is TrainingProgram => program !== null);
-            if (normalizedPrograms.length) {
-              setPrograms(normalizedPrograms);
-            }
-          }
-        }
-        if (storedTemplates) {
-          const parsedTemplates = JSON.parse(storedTemplates) as unknown;
-          if (Array.isArray(parsedTemplates)) {
-            setTemplates(parsedTemplates.map(normalizeTemplate).filter((template): template is ProgramTemplate => template !== null));
-          }
-        }
-        if (storedComments) {
-          const parsedComments = JSON.parse(storedComments) as unknown;
-          if (Array.isArray(parsedComments) && parsedComments.every(isComment)) {
-            setComments(parsedComments);
-          }
-        }
-        if (storedDayLogs) {
-          const parsedDayLogs = JSON.parse(storedDayLogs) as unknown;
-          if (Array.isArray(parsedDayLogs) && parsedDayLogs.every(isDayLog)) {
-            setDayLogs(parsedDayLogs);
-          }
-        }
-      }
-      catch {
-      }
-      finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    }
-    void restoreWorkspace();
-    const listener = () => {
-      void restoreWorkspace();
-    };
-    workspaceListeners.add(listener);
-    return () => {
-      isMounted = false;
-      workspaceListeners.delete(listener);
-    };
+    void ensureWorkspaceLoaded();
   }, []);
 
   async function persistPrograms(nextPrograms: TrainingProgram[]) {
-    setPrograms(nextPrograms);
+    const previousPrograms = programs;
+    programs = nextPrograms;
+    publishWorkspaceSnapshot();
     try {
-      await AsyncStorage.setItem(programStorageKey, JSON.stringify(nextPrograms));
+      await writeWorkspaceItem(programStorageKey, JSON.stringify(nextPrograms));
     }
-    catch {
+    catch (error) {
+      if (programs === nextPrograms) {
+        programs = previousPrograms;
+        publishWorkspaceSnapshot();
+      }
+      throw error;
     }
-    notifyWorkspaceListeners();
   }
 
   async function persistTemplates(nextTemplates: ProgramTemplate[]) {
-    setTemplates(nextTemplates);
+    const previousTemplates = templates;
+    templates = nextTemplates;
+    publishWorkspaceSnapshot();
     try {
-      await AsyncStorage.setItem(templateStorageKey, JSON.stringify(nextTemplates));
+      await writeWorkspaceItem(templateStorageKey, JSON.stringify(nextTemplates));
     }
-    catch {
+    catch (error) {
+      if (templates === nextTemplates) {
+        templates = previousTemplates;
+        publishWorkspaceSnapshot();
+      }
+      throw error;
     }
-    notifyWorkspaceListeners();
   }
 
   async function persistComments(nextComments: ProgramComment[]) {
-    setComments(nextComments);
+    const previousComments = comments;
+    comments = nextComments;
+    publishWorkspaceSnapshot();
     try {
-      await AsyncStorage.setItem(commentStorageKey, JSON.stringify(nextComments));
+      await writeWorkspaceItem(commentStorageKey, JSON.stringify(nextComments));
     }
-    catch {
+    catch (error) {
+      if (comments === nextComments) {
+        comments = previousComments;
+        publishWorkspaceSnapshot();
+      }
+      throw error;
     }
-    notifyWorkspaceListeners();
   }
 
   async function persistDayLogs(nextDayLogs: ProgramDayLog[]) {
-    setDayLogs(nextDayLogs);
+    const previousDayLogs = dayLogs;
+    dayLogs = nextDayLogs;
+    publishWorkspaceSnapshot();
     try {
-      await AsyncStorage.setItem(dayLogStorageKey, JSON.stringify(nextDayLogs));
+      await writeWorkspaceItem(dayLogStorageKey, JSON.stringify(nextDayLogs));
     }
-    catch {
+    catch (error) {
+      if (dayLogs === nextDayLogs) {
+        dayLogs = previousDayLogs;
+        publishWorkspaceSnapshot();
+      }
+      throw error;
     }
-    notifyWorkspaceListeners();
   }
 
   async function createProgram(athleteId: string, input: ProgramInput) {
+    await ensureWorkspaceLoaded();
     const nextProgram: TrainingProgram = { ...input, id: createId("program"), athleteId, updatedAt: new Date().toISOString(), weeks: [createWeek(1)] };
     const nextPrograms = input.status === "active"
       ? programs.map((program) => program.athleteId === athleteId && program.status === "active" ? { ...program, status: "draft" as const } : program)
@@ -510,6 +560,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateProgram(programId: string, input: ProgramInput) {
+    await ensureWorkspaceLoaded();
     const targetProgram = programs.find((program) => program.id === programId);
     const nextPrograms = programs.map((program) => {
       if (program.id === programId) {
@@ -524,12 +575,14 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function deleteProgram(programId: string) {
+    await ensureWorkspaceLoaded();
     await persistPrograms(programs.filter((program) => program.id !== programId));
     await persistComments(comments.filter((comment) => comment.programId !== programId));
     await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId));
   }
 
   async function createTemplate(coachId: string, input: ProgramTemplateInput): Promise<ProgramTemplate> {
+    await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
     const template: ProgramTemplate = { ...input, id: createId("template"), coachId, createdAt: now, updatedAt: now, weeks: [createTemplateWeek(1)] };
     await persistTemplates([...templates, template]);
@@ -537,26 +590,31 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateTemplate(templateId: string, input: ProgramTemplateInput) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId ? { ...template, ...input, updatedAt: new Date().toISOString() } : template));
   }
 
   async function deleteTemplate(templateId: string) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.filter((template) => template.id !== templateId));
   }
 
   async function addTemplateWeek(templateId: string) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
       ? { ...template, updatedAt: new Date().toISOString(), weeks: [...template.weeks, createTemplateWeek(template.weeks.length + 1)] }
       : template));
   }
 
   async function updateTemplateWeek(templateId: string, weekId: string, name: string) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
       ? updateTemplateStructure(template, weekId, (week) => ({ ...week, name: name.trim() || `Week ${week.weekNumber}` }))
       : template));
   }
 
   async function addTemplateDay(templateId: string, weekId: string, day: Pick<ProgramTemplateDay, "name" | "focus">): Promise<ProgramTemplateDay> {
+    await ensureWorkspaceLoaded();
     const template = templates.find((candidate) => candidate.id === templateId);
     const targetWeek = template?.weeks.find((week) => week.id === weekId);
     if (!template || !targetWeek) {
@@ -570,12 +628,14 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateTemplateDay(templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
       ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus } : currentDay) }))
       : template));
   }
 
   async function addTemplateExercise(templateId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>): Promise<ProgramExercise> {
+    await ensureWorkspaceLoaded();
     const targetDay = templates.find((template) => template.id === templateId)?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
     if (!targetDay) {
       throw new Error("The template training day is no longer available.");
@@ -588,12 +648,14 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateTemplateExercise(templateId: string, weekId: string, dayId: string, exercise: ProgramExercise) {
+    await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
       ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
       : template));
   }
 
   async function assignTemplate(templateId: string, athleteId: string, startDate: string): Promise<TrainingProgram> {
+    await ensureWorkspaceLoaded();
     const template = templates.find((candidate) => candidate.id === templateId);
     if (!template) {
       throw new Error("The master template is no longer available.");
@@ -631,6 +693,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function addWeek(programId: string) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? { ...program, updatedAt: new Date().toISOString(), weeks: [...program.weeks, createWeek(program.weeks.length + 1)] }
       : program);
@@ -638,6 +701,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateWeek(programId: string, weekId: string, name: string) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, name: name.trim() || `Week ${week.weekNumber}` }))
       : program);
@@ -645,6 +709,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function deleteWeek(programId: string, weekId: string) {
+    await ensureWorkspaceLoaded();
     const removedDayIds = programs.find((program) => program.id === programId)?.weeks
       .find((week) => week.id === weekId)?.days.map((day) => day.id) ?? [];
     const nextPrograms = programs.map((program) => program.id === programId
@@ -656,6 +721,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function addDay(programId: string, weekId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>): Promise<ProgramDay> {
+    await ensureWorkspaceLoaded();
     const program = programs.find((candidate) => candidate.id === programId);
     const targetWeek = program?.weeks.find((week) => week.id === weekId);
     if (!program || !targetWeek) {
@@ -676,6 +742,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateDay(programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus, ...(isIsoDate(day.scheduledDate) ? { scheduledDate: day.scheduledDate, scheduleUpdatedBy: "coach" as const, scheduleUpdatedAt: new Date().toISOString() } : {}) } : currentDay) }))
       : program);
@@ -683,6 +750,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function deleteDay(programId: string, weekId: string, dayId: string) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.filter((day) => day.id !== dayId) }))
       : program);
@@ -692,6 +760,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function rescheduleDay(programId: string, weekId: string, dayId: string, scheduledDate: string, updatedBy: DayScheduleAuthor) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, scheduledDate, scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() } : day) }))
       : program);
@@ -699,6 +768,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function rescheduleWeek(programId: string, weekId: string, startDate: string, updatedBy: DayScheduleAuthor) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: [...week.days].sort((left, right) => left.sequence - right.sequence).map((day, index) => ({ ...day, scheduledDate: addCalendarDays(startDate, index), scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() })) }))
       : program);
@@ -706,6 +776,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function addExercise(programId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>): Promise<ProgramExercise> {
+    await ensureWorkspaceLoaded();
     const targetDay = programs.find((program) => program.id === programId)?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
     if (!targetDay) {
       throw new Error("The training day is no longer available.");
@@ -719,6 +790,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateExercise(programId: string, weekId: string, dayId: string, exercise: ProgramExercise) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
       : program);
@@ -726,6 +798,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function deleteExercise(programId: string, weekId: string, dayId: string, exerciseId: string) {
+    await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.filter((exercise) => exercise.id !== exerciseId) } : day) }))
       : program);
@@ -736,6 +809,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function logDaySet(programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) {
+    await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
     const exercise = programs.find((program) => program.id === programId)?.weeks.flatMap((week) => week.days).find((day) => day.id === dayId)?.exercises.find((candidate) => candidate.id === exerciseId);
     if (completionStatus === "done" && exercise?.prescriptionMode !== "exact" && (!Number.isFinite(actualWeight) || actualWeight === undefined || actualWeight <= 0)) {
@@ -745,19 +819,20 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     const existingSets = existingDayLog?.sets ?? [];
     const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
     const nextSet: ProgramDaySetLog = completionStatus === "pending"
-      ? { exerciseId, setNumber, completionStatus, instagramVideoUrl: previousSet?.instagramVideoUrl }
+      ? { exerciseId, setNumber, completionStatus, instagramVideoUrl: previousSet?.instagramVideoUrl, videoAnalysis: previousSet?.videoAnalysis }
       : {
         exerciseId,
         setNumber,
         completionStatus,
         completedAt: now,
         ...(completionStatus === "done" ? { actualWeight: exercise?.prescriptionMode === "exact" ? exercise.prescriptionValue : actualWeight, weightUnit: exercise?.weightUnit ?? weightUnit } : {}),
-        ...(previousSet?.instagramVideoUrl ? { instagramVideoUrl: previousSet.instagramVideoUrl } : {})
+        ...(previousSet?.instagramVideoUrl ? { instagramVideoUrl: previousSet.instagramVideoUrl } : {}),
+        ...(previousSet?.videoAnalysis ? { videoAnalysis: previousSet.videoAnalysis } : {})
       };
     const nextSets = [
       ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
       nextSet
-    ].filter((set) => set.completionStatus !== "pending" || Boolean(set.instagramVideoUrl));
+    ].filter((set) => set.completionStatus !== "pending" || Boolean(set.instagramVideoUrl) || Boolean(set.videoAnalysis));
     const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
     const nextDayLogs = nextSets.length
       ? [...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]
@@ -766,19 +841,35 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function updateDaySetInstagramLink(programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) {
+    await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
     const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
     const existingSets = existingDayLog?.sets ?? [];
     const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
     const nextSets = [
       ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
-      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl }
+      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl, videoAnalysis: previousSet?.videoAnalysis }
+    ];
+    const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
+    await persistDayLogs([...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]);
+  }
+
+  async function updateDaySetVideoAnalysis(programId: string, dayId: string, exerciseId: string, setNumber: number, videoAnalysis: LiftVideoAnalysis) {
+    await ensureWorkspaceLoaded();
+    const now = new Date().toISOString();
+    const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
+    const existingSets = existingDayLog?.sets ?? [];
+    const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
+    const nextSets = [
+      ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
+      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl: previousSet?.instagramVideoUrl, videoAnalysis }
     ];
     const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
     await persistDayLogs([...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]);
   }
 
   async function updateDayRating(programId: string, dayId: string, sessionRating: number | null) {
+    await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
     const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
     const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
@@ -796,15 +887,16 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   }
 
   async function addComment(comment: Omit<ProgramComment, "id" | "createdAt">) {
+    await ensureWorkspaceLoaded();
     await persistComments([...comments, { ...comment, id: createId("comment"), createdAt: new Date().toISOString() }]);
   }
 
   return {
-    programs,
-    templates,
-    comments,
-    dayLogs,
-    isLoading,
+    programs: snapshot.programs,
+    templates: snapshot.templates,
+    comments: snapshot.comments,
+    dayLogs: snapshot.dayLogs,
+    isLoading: snapshot.isLoading,
     createProgram,
     updateProgram,
     deleteProgram,
@@ -831,6 +923,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     deleteExercise,
     logDaySet,
     updateDaySetInstagramLink,
+    updateDaySetVideoAnalysis,
     updateDayRating,
     addComment
   };

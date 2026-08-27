@@ -1,0 +1,83 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore .NET dependencies
+        run: dotnet restore PowerliftingProgram.sln
+
+      - name: Build .NET solution
+        run: dotnet build PowerliftingProgram.sln --configuration Release --no-restore
+
+      - name: Install EF Core CLI
+        run: dotnet tool install --global dotnet-ef --version 8.0.11
+
+      - name: Verify EF migration snapshot
+        env:
+          ASPNETCORE_ENVIRONMENT: LocalPostgres
+          Database__ApplyMigrationsOnStartup: "false"
+          Database__SeedSampleDataOnStartup: "false"
+        run: dotnet ef migrations has-pending-model-changes --project src/PowerliftingProgram.Infrastructure --startup-project src/PowerliftingProgram.Api --configuration Release --no-build
+
+      - name: Run .NET tests
+        run: dotnet test PowerliftingProgram.sln --configuration Release --no-build --no-restore
+
+  client:
+    name: Client checks and export
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Install pinned lint tooling
+        working-directory: client
+        run: npm install --no-save --package-lock=false --no-audit --no-fund eslint@8.57.0 eslint-config-expo@8.0.1
+
+      - name: Type-check client
+        working-directory: client
+        run: npm run typecheck
+
+      - name: Lint client
+        working-directory: client
+        run: npm run lint
+
+      - name: Export static client
+        working-directory: client
+        env:
+          CI: "true"
+          EXPO_NO_TELEMETRY: "1"
+          EXPO_PUBLIC_STATIC_DEMO: "true"
+        run: npm run export:web -- --output-dir dist-ci

@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Modal, Pressable, Text, TextInput, View } from "react-native";
 import { CalendarDays, ChevronLeft, ChevronRight, X } from "lucide-react-native";
 
+import { useThemePreference } from "../theme/ThemePreferenceContext";
+
 interface DatePickerFieldProps {
   label: string;
   value: string;
@@ -26,7 +28,9 @@ function monthLabel(year: number, month: number) {
 }
 
 export function DatePickerField({ label, value, onChangeText, accessibilityLabel }: DatePickerFieldProps) {
+  const { theme } = useThemePreference();
   const [isOpen, setIsOpen] = useState(false);
+  const surfaceIconColor = theme === "dark" ? "#F5F7FB" : "#111827";
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const date = dateFromIso(value) ?? new Date();
     return { year: date.getUTCFullYear(), month: date.getUTCMonth() };
@@ -69,7 +73,7 @@ export function DatePickerField({ label, value, onChangeText, accessibilityLabel
           accessibilityLabel={accessibilityLabel ?? label}
         />
         <Pressable className="h-11 w-11 items-center justify-center border border-fog bg-paper" onPress={openCalendar} accessibilityLabel={`Open calendar for ${label}`}>
-          <CalendarDays size={18} color="#F5F7FB" />
+          <CalendarDays size={18} color={surfaceIconColor} />
         </Pressable>
       </View>
 
@@ -79,16 +83,16 @@ export function DatePickerField({ label, value, onChangeText, accessibilityLabel
             <View className="flex-row items-center justify-between">
               <Text className="font-heading text-xl uppercase text-ink">Choose date</Text>
               <Pressable className="h-9 w-9 items-center justify-center border border-fog bg-canvas" onPress={() => setIsOpen(false)} accessibilityLabel="Close calendar">
-                <X size={17} color="#F5F7FB" />
+                <X size={17} color={surfaceIconColor} />
               </Pressable>
             </View>
             <View className="mt-5 flex-row items-center justify-between">
               <Pressable className="h-10 w-10 items-center justify-center border border-fog bg-canvas" onPress={() => shiftMonth(-1)} accessibilityLabel="Previous month">
-                <ChevronLeft size={19} color="#F5F7FB" />
+                <ChevronLeft size={19} color={surfaceIconColor} />
               </Pressable>
               <Text className="font-serif text-base font-bold text-ink">{monthLabel(visibleMonth.year, visibleMonth.month)}</Text>
               <Pressable className="h-10 w-10 items-center justify-center border border-fog bg-canvas" onPress={() => shiftMonth(1)} accessibilityLabel="Next month">
-                <ChevronRight size={19} color="#F5F7FB" />
+                <ChevronRight size={19} color={surfaceIconColor} />
               </Pressable>
             </View>
             <View className="mt-4 flex-row flex-wrap">
@@ -105,7 +109,7 @@ export function DatePickerField({ label, value, onChangeText, accessibilityLabel
               })}
             </View>
             <Pressable className="mt-5 min-h-11 flex-row items-center justify-center gap-2 border border-fog bg-canvas px-4 py-3" onPress={() => { onChangeText(todayIsoDate); setIsOpen(false); }} accessibilityLabel="Choose today">
-              <CalendarDays size={16} color="#F5F7FB" />
+              <CalendarDays size={16} color={surfaceIconColor} />
               <Text className="font-serif text-sm font-bold text-ink">Today</Text>
             </Pressable>
           </View>

@@ -17,8 +17,11 @@ public sealed class TrainingCalculationService : ITrainingCalculationService
         decimal targetRpe)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(estimatedOneRepMaxKg, 0m);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(estimatedOneRepMaxKg, 1_200m);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sets);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(sets, 20);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(repetitions);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(repetitions, 100);
         ArgumentOutOfRangeException.ThrowIfLessThan(targetRpe, 1m);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(targetRpe, 10m);
 
@@ -43,8 +46,15 @@ public sealed class TrainingCalculationService : ITrainingCalculationService
         decimal plateIncrementKg = 2.5m)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(workingLoadKg, 0m);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(workingLoadKg, 1_200m);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(barbellKg, 0m);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(barbellKg, 100m);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(plateIncrementKg, 0m);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(plateIncrementKg, 25m);
+        if (workingLoadKg - plateIncrementKg < barbellKg)
+        {
+            return [];
+        }
 
         var rawLoads = new[] { barbellKg, workingLoadKg * 0.45m, workingLoadKg * 0.62m, workingLoadKg * 0.78m, workingLoadKg * 0.9m };
         var repetitions = new[] { 10, 5, 3, 2, 1 };

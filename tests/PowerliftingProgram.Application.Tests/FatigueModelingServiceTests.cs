@@ -41,4 +41,13 @@ public sealed class FatigueModelingServiceTests
 
         Assert.Equal(100, readiness.ReadinessScore);
     }
+
+    [Fact]
+    public void CalculateReadiness_AtMaximumDate_DoesNotOverflow()
+    {
+        var readiness = _service.CalculateReadiness([], DateOnly.MaxValue);
+
+        Assert.Equal(DateOnly.MaxValue, readiness.Date);
+        Assert.Equal(100, readiness.ReadinessScore);
+    }
 }

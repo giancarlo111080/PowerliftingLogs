@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Domain.Entities;
@@ -21,6 +22,7 @@ public sealed class CoachInvitationsController(
     IConfiguration configuration) : ControllerBase
 {
     [HttpPost("athlete-invitations")]
+    [EnableRateLimiting("invitations")]
     [ProducesResponseType(typeof(CoachInvitationResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<CoachInvitationResponse>> CreateInvitation([FromBody] CreateCoachInvitationRequest request, CancellationToken cancellationToken)

@@ -30,19 +30,33 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
 
       - name: Install client dependencies
         working-directory: client
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Install pinned lint tooling
+        working-directory: client
+        run: npm install --no-save --package-lock=false --no-audit --no-fund eslint@8.57.0 eslint-config-expo@8.0.1
+
+      - name: Check client
+        working-directory: client
+        run: |
+          npm run typecheck
+          npm run lint
 
       - name: Export static local-first demo
         working-directory: client
         env:
+          CI: "true"
           EXPO_NO_TELEMETRY: "1"
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_BASE_URL: "/${{ github.event.repository.name }}"
           EXPO_PUBLIC_STATIC_DEMO: ${{ vars.EXPO_PUBLIC_API_URL == '' && 'true' || 'false' }}
-        run: npx expo export --platform web --output-dir dist --base-url "/${{ github.event.repository.name }}"
+        run: npx expo export --platform web --output-dir dist
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3

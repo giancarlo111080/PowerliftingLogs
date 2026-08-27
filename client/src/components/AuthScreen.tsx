@@ -1,30 +1,35 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
-import { ArrowRight, CircleDot, Dumbbell, LockKeyhole, ShieldCheck, Users, X } from "lucide-react-native";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleDot, Dumbbell, KeyRound, LockKeyhole, ShieldCheck, Users, X } from "lucide-react-native";
 import { router } from "expo-router";
 
-import { getInvitationContext, isStaticDemo, staticDemoCredentials, type PlatformRole } from "../lib/platformApi";
+import { completePasswordReset, getInvitationContext, isStaticDemo, requestPasswordReset, staticDemoCredentials, type PlatformRole } from "../lib/platformApi";
 import { useSession } from "../auth/AuthSessionContext";
 
+type AuthMode = "sign-in" | "register" | "forgot-password" | "reset-password";
+
 interface AuthScreenProps {
-  initialMode?: "sign-in" | "register";
+  initialMode?: AuthMode;
   invitationToken?: string;
+  resetToken?: string;
 }
 
-export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScreenProps) {
+export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToken }: AuthScreenProps) {
   const { login, register } = useSession();
-  const [mode, setMode] = useState<"sign-in" | "register">(invitationToken ? "register" : initialMode);
+  const staticRegistrationRequested = isStaticDemo && (Boolean(invitationToken) || initialMode === "register");
+  const [mode, setMode] = useState<AuthMode>(isStaticDemo ? "sign-in" : resetToken ? "reset-password" : invitationToken ? "register" : initialMode);
   const [role, setRole] = useState<PlatformRole>(invitationToken ? "ATHLETE" : "ATHLETE");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [inviteMessage, setInviteMessage] = useState<string | null>(invitationToken ? "Checking your coach invitation..." : null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(staticRegistrationRequested ? "Registration requires the hosted API. Choose a demo workspace to continue." : initialMode === "reset-password" && !resetToken ? "This password reset link is invalid." : null);
+  const [messageTone, setMessageTone] = useState<"error" | "success">("error");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!invitationToken) {
+    if (!invitationToken || isStaticDemo) {
       return;
     }
     let isMounted = true;
@@ -47,6 +52,56 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScr
 
   async function submit() {
     setMessage(null);
+    setMessageTone("error");
+    if (mode === "forgot-password") {
+      if (!email.trim()) {
+        setMessage("Enter your email address.");
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        const response = await requestPasswordReset(email.trim());
+        setMessage(response.message);
+        setMessageTone("success");
+      }
+      catch (reason) {
+        setMessage(reason instanceof Error ? reason.message : "Could not request a password reset.");
+      }
+      finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+    if (mode === "reset-password") {
+      if (!resetToken) {
+        setMessage("This password reset link is invalid.");
+        return;
+      }
+      if (password.length < 12 || password.length > 128) {
+        setMessage("Use between 12 and 128 characters for your new password.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        setMessage("Your passwords do not match.");
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        await completePasswordReset(resetToken, password);
+        setPassword("");
+        setConfirmPassword("");
+        setMode("sign-in");
+        setMessage("Your password has been changed. Sign in with your new password.");
+        setMessageTone("success");
+      }
+      catch (reason) {
+        setMessage(reason instanceof Error ? reason.message : "Could not reset this password.");
+      }
+      finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
     if (!email.trim() || !password) {
       setMessage("Enter your email address and password.");
       return;
@@ -101,17 +156,22 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScr
   }
 
   const isRegistering = mode === "register";
+  const isForgotPassword = mode === "forgot-password";
+  const isResettingPassword = mode === "reset-password";
+  const heading = isRegistering ? "Build Your Base" : isForgotPassword ? "Recover Access" : isResettingPassword ? "Set New Password" : "Enter The Platform";
+  const supportingText = isRegistering ? "Create the account that owns your training." : isForgotPassword ? "Enter your account email and we will send a one-hour reset link." : isResettingPassword ? "Choose a new password for your Iron Forge account." : "Sign in to your coaching or athlete workspace.";
+  const actionLabel = isRegistering ? "Create account" : isForgotPassword ? "Send reset link" : isResettingPassword ? "Reset password" : "Sign in";
   return (
     <View className="flex-1 bg-canvas px-5 py-8 sm:items-center sm:justify-center">
       <View className="w-full max-w-xl">
         <View className="border-l-4 border-signal pl-4">
           <View className="flex-row items-center gap-3"><View className="h-11 w-11 items-center justify-center border border-fog bg-paper"><Dumbbell size={23} color="#CCFF00" /></View><Text className="font-heading text-3xl uppercase text-ink">Iron Forge</Text></View>
-          <Text className="mt-7 font-heading text-4xl uppercase leading-none text-ink">{isRegistering ? "Build Your Base" : "Enter The Platform"}</Text>
-          <Text className="mt-3 font-sans text-base leading-6 text-muted">{isRegistering ? "Create the account that owns your training." : "Sign in to your coaching or athlete workspace."}</Text>
+          <Text className="mt-7 font-heading text-4xl uppercase leading-none text-ink">{heading}</Text>
+          <Text className="mt-3 font-sans text-base leading-6 text-muted">{supportingText}</Text>
         </View>
 
         <View className="mt-8 border border-fog bg-paper p-5">
-          <View className="flex-row border-b border-fog"><Pressable className={`flex-1 border-b-2 px-3 py-3 ${!isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("sign-in"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${!isRegistering ? "text-ink" : "text-muted"}`}>Sign in</Text></Pressable>{!isStaticDemo ? <Pressable className={`flex-1 border-b-2 px-3 py-3 ${isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("register"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${isRegistering ? "text-ink" : "text-muted"}`}>Register</Text></Pressable> : null}</View>
+          {isForgotPassword || isResettingPassword ? <Pressable className="flex-row items-center gap-2 border-b border-fog px-1 pb-3" onPress={() => { setMode("sign-in"); setMessage(null); setPassword(""); setConfirmPassword(""); }} accessibilityLabel="Back to sign in"><ArrowLeft size={17} color="#9B9B95" /><Text className="font-heading text-sm uppercase text-muted">Back to sign in</Text></Pressable> : <View className="flex-row border-b border-fog"><Pressable className={`flex-1 border-b-2 px-3 py-3 ${!isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("sign-in"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${!isRegistering ? "text-ink" : "text-muted"}`}>Sign in</Text></Pressable>{!isStaticDemo ? <Pressable className={`flex-1 border-b-2 px-3 py-3 ${isRegistering ? "border-signal" : "border-transparent"}`} onPress={() => { setMode("register"); setMessage(null); }}><Text className={`text-center font-heading text-base uppercase ${isRegistering ? "text-ink" : "text-muted"}`}>Register</Text></Pressable> : null}</View>}
 
           {inviteMessage ? <View className="mt-5 flex-row gap-3 border border-zinc bg-zinc/10 p-3"><ShieldCheck size={18} color="#CCFF00" /><Text className="flex-1 font-sans text-sm leading-5 text-ink">{inviteMessage}</Text></View> : null}
           {isStaticDemo && !isRegistering ? <View className="mt-5 border border-fog bg-canvas p-4"><Text className="font-heading text-sm uppercase text-ink">Open the static demo</Text><Text className="mt-1 font-sans text-sm leading-5 text-muted">Choose a sample workspace. Changes stay only in this browser.</Text><View className="mt-4 flex-col gap-2 sm:flex-row"><Pressable className="min-h-11 flex-1 flex-row items-center justify-center gap-2 border border-fog bg-paper px-3 py-3 disabled:opacity-60" onPress={() => void signInToDemo("athlete")} disabled={isSubmitting} accessibilityLabel="Open athlete demo"><Dumbbell size={17} color="#F5F7FB" /><Text className="font-heading text-sm uppercase text-ink">Athlete demo</Text></Pressable><Pressable className="min-h-11 flex-1 flex-row items-center justify-center gap-2 bg-signal px-3 py-3 disabled:opacity-60" onPress={() => void signInToDemo("coach")} disabled={isSubmitting} accessibilityLabel="Open coach demo"><Users size={17} color="#FFFFFF" /><Text className="font-heading text-sm uppercase text-white">Coach demo</Text></Pressable></View></View> : null}
@@ -119,12 +179,13 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken }: AuthScr
 
           <View className="mt-5 gap-4">
             {isRegistering ? <Field label="Display name" value={displayName} onChangeText={setDisplayName} placeholder="How your coach will know you" /> : null}
-            <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" editable={!Boolean(invitationToken)} />
-            <Field label="Password" value={password} onChangeText={setPassword} placeholder="At least 12 characters" secureTextEntry />
-            {isRegistering ? <Field label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Repeat your password" secureTextEntry /> : null}
+            {!isResettingPassword ? <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" editable={!Boolean(invitationToken)} /> : null}
+            {!isForgotPassword ? <Field label={isResettingPassword ? "New password" : "Password"} value={password} onChangeText={setPassword} placeholder="At least 12 characters" secureTextEntry /> : null}
+            {isRegistering || isResettingPassword ? <Field label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Repeat your password" secureTextEntry /> : null}
+            {mode === "sign-in" && !isStaticDemo ? <Pressable className="self-end py-1" onPress={() => { setMode("forgot-password"); setMessage(null); setPassword(""); }} accessibilityLabel="Forgot password"><Text className="font-heading text-sm uppercase text-signal">Forgot password?</Text></Pressable> : null}
           </View>
-          {message ? <View className="mt-4 flex-row gap-2 border border-signal bg-signal/10 p-3"><X size={17} color="#D32F2F" /><Text className="flex-1 font-sans text-sm leading-5 text-ink">{message}</Text></View> : null}
-          <Pressable className="mt-5 min-h-12 flex-row items-center justify-center gap-2 bg-signal px-4 py-3 disabled:opacity-60" onPress={() => void submit()} disabled={isSubmitting} accessibilityLabel={isRegistering ? "Create account" : "Sign in"}>{isSubmitting ? <ActivityIndicator color="#F4F4ED" /> : <><LockKeyhole size={18} color="#F4F4ED" /><Text className="font-heading text-base uppercase text-white">{isRegistering ? "Create account" : "Sign in"}</Text><ArrowRight size={17} color="#F4F4ED" /></>}</Pressable>
+          {message ? <View className={`mt-4 flex-row gap-2 border p-3 ${messageTone === "success" ? "border-moss bg-moss/10" : "border-signal bg-signal/10"}`}>{messageTone === "success" ? <CheckCircle2 size={17} color="#2E6F5E" /> : <X size={17} color="#D32F2F" />}<Text className="flex-1 font-sans text-sm leading-5 text-ink">{message}</Text></View> : null}
+          <Pressable className="mt-5 min-h-12 flex-row items-center justify-center gap-2 bg-signal px-4 py-3 disabled:opacity-60" onPress={() => void submit()} disabled={isSubmitting} accessibilityLabel={actionLabel}>{isSubmitting ? <ActivityIndicator color="#F4F4ED" /> : <>{isForgotPassword || isResettingPassword ? <KeyRound size={18} color="#F4F4ED" /> : <LockKeyhole size={18} color="#F4F4ED" />}<Text className="font-heading text-base uppercase text-white">{actionLabel}</Text><ArrowRight size={17} color="#F4F4ED" /></>}</Pressable>
         </View>
         <Text className="mt-5 text-center font-mono text-xs leading-5 text-muted">IRON FORGE USES SECURE SESSION TOKENS AND ROLE-BASED ACCESS.</Text>
       </View>

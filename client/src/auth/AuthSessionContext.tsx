@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from "react";
+import { Platform } from "react-native";
 
 import { getCoachAthletes, getCurrentAccount, registerAccount, signIn, type AccountResponse, type PlatformRole } from "../lib/platformApi";
 
@@ -50,6 +51,42 @@ const sessionStorageKey = "iron-forge/session";
 const profileStorageKey = "iron-forge/profiles";
 const AuthSessionContext = createContext<AuthSessionContextValue | null>(null);
 
+function getWebSessionStorage() {
+  return Platform.OS === "web" && typeof globalThis.sessionStorage !== "undefined" ? globalThis.sessionStorage : null;
+}
+
+async function readStoredSession() {
+  const webStorage = getWebSessionStorage();
+  if (!webStorage) {
+    return AsyncStorage.getItem(sessionStorageKey);
+  }
+  const currentSession = webStorage.getItem(sessionStorageKey);
+  if (currentSession) {
+    return currentSession;
+  }
+  const legacySession = await AsyncStorage.getItem(sessionStorageKey);
+  if (legacySession) {
+    webStorage.setItem(sessionStorageKey, legacySession);
+    await AsyncStorage.removeItem(sessionStorageKey);
+  }
+  return legacySession;
+}
+
+async function writeStoredSession(session: PlatformSession) {
+  const webStorage = getWebSessionStorage();
+  if (webStorage) {
+    webStorage.setItem(sessionStorageKey, JSON.stringify(session));
+    await AsyncStorage.removeItem(sessionStorageKey);
+    return;
+  }
+  await AsyncStorage.setItem(sessionStorageKey, JSON.stringify(session));
+}
+
+async function removeStoredSession() {
+  getWebSessionStorage()?.removeItem(sessionStorageKey);
+  await AsyncStorage.removeItem(sessionStorageKey);
+}
+
 function initials(displayName: string) {
   return displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "IF";
 }
@@ -96,7 +133,7 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
     async function restore() {
       try {
-        const storedSession = await AsyncStorage.getItem(sessionStorageKey);
+        const storedSession = await readStoredSession();
         const storedProfiles = await AsyncStorage.getItem(profileStorageKey);
         if (!isMounted || !storedSession) {
           return;
@@ -112,12 +149,15 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
         const stored = storedProfiles ? JSON.parse(storedProfiles) as PlatformProfile[] : [];
         const nextProfiles = mergeProfiles(currentProfile, roster.map((athlete) => athleteProfile(athlete, account.id)), stored);
         if (isMounted) {
+          const restoredCoachAthleteId = roster.some((athlete) => athlete.athleteProfileId === persistedSession.activeAthleteId)
+            ? persistedSession.activeAthleteId
+            : roster[0]?.athleteProfileId ?? "";
           setProfiles(nextProfiles);
-          setSession({ ...persistedSession, userId: account.id, role, activeAthleteId: role === "ATHLETE" ? currentProfile.id : persistedSession.activeAthleteId || roster[0]?.athleteProfileId || "" });
+          setSession({ ...persistedSession, userId: account.id, role, activeAthleteId: role === "ATHLETE" ? currentProfile.id : restoredCoachAthleteId });
         }
       }
       catch {
-        await AsyncStorage.multiRemove([sessionStorageKey, profileStorageKey]);
+        await removeStoredSession();
       }
       finally {
         if (isMounted) {
@@ -135,14 +175,14 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
   const activeAthlete = session ? profiles.find((profile) => profile.id === session.activeAthleteId && profile.role === "ATHLETE") ?? null : null;
 
   async function persist(nextSession: PlatformSession | null, nextProfiles = profiles) {
-    setSession(nextSession);
-    setProfiles(nextProfiles);
     if (nextSession) {
-      await AsyncStorage.multiSet([[sessionStorageKey, JSON.stringify(nextSession)], [profileStorageKey, JSON.stringify(nextProfiles)]]);
+      await Promise.all([writeStoredSession(nextSession), AsyncStorage.setItem(profileStorageKey, JSON.stringify(nextProfiles))]);
     }
     else {
-      await AsyncStorage.multiRemove([sessionStorageKey, profileStorageKey]);
+      await removeStoredSession();
     }
+    setSession(nextSession);
+    setProfiles(nextProfiles);
   }
 
   async function establish(account: AccountResponse, accessToken: string) {
@@ -165,7 +205,7 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
   }
 
   async function logout() {
-    await persist(null, []);
+    await persist(null, profiles);
   }
 
   async function selectAthlete(athleteProfileId: string) {
@@ -193,7 +233,19 @@ function athleteProfile(athlete: { athleteProfileId: string; userId: string; dis
 function mergeProfiles(current: PlatformProfile, roster: PlatformProfile[], existing: PlatformProfile[]) {
   const retained = existing.filter((profile) => profile.userId === current.userId || roster.some((athlete) => athlete.userId === profile.userId));
   const incoming = [current, ...roster];
-  return incoming.map((profile) => ({ ...retained.find((candidate) => candidate.userId === profile.userId), ...profile }));
+  return incoming.map((profile) => {
+    const savedProfile = retained.find((candidate) => candidate.userId === profile.userId);
+    const mergedProfile = { ...profile, ...savedProfile };
+    return {
+      ...mergedProfile,
+      id: profile.id,
+      userId: profile.userId,
+      coachId: profile.coachId,
+      role: profile.role,
+      email: profile.email,
+      initials: initials(mergedProfile.displayName)
+    };
+  });
 }
 
 export function useSession() {

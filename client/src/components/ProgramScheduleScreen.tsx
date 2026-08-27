@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { CalendarDays, ChevronRight, RotateCcw, Save } from "lucide-react-native";
 
-import { useProxySession } from "../auth/ProxySessionContext";
+import { useSession } from "../auth/AuthSessionContext";
 import { type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 import { DatePickerField } from "./DatePickerField";
@@ -23,14 +23,14 @@ function DateField({ label, value, onChangeText }: { label: string; value: strin
 }
 
 export function ProgramScheduleScreen() {
-  const { session, currentProfile, activeAthlete } = useProxySession();
+  const { session, currentProfile, activeAthlete } = useSession();
   const { programs, isLoading, rescheduleDay, rescheduleWeek } = useProgramWorkspaceStore();
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [dayDates, setDayDates] = useState<Record<string, string>>({});
   const [weekStartDates, setWeekStartDates] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
 
-  const isCoach = session?.role === "coach";
+  const isCoach = session?.role === "COACH";
   const athlete = isCoach ? activeAthlete : currentProfile;
   const athletePrograms = programs
     .filter((program) => program.athleteId === athlete?.id)
@@ -40,10 +40,16 @@ export function ProgramScheduleScreen() {
     ?? athletePrograms[0]
     ?? null;
 
-  if (!session || !currentProfile || !athlete) {
+  if (!session || !currentProfile) {
     return <AppShell title="Program Schedule"><View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /></View></AppShell>;
   }
-  const actorRole = session.role;
+  if (isCoach && !activeAthlete) {
+    return <AppShell title="Program Schedule"><View className="flex-1 items-center justify-center px-5"><Text className="font-serif text-lg font-bold text-ink">No athlete selected</Text><Text className="mt-2 max-w-md text-center font-serif text-sm leading-6 text-muted">Link an athlete to this coach account, or select an available athlete from the sidebar.</Text></View></AppShell>;
+  }
+  if (!athlete) {
+    return null;
+  }
+  const actorRole = session.role === "COACH" ? "coach" : "lifter";
 
   async function saveDayDate(program: TrainingProgram, weekId: string, dayId: string, existingDate: string) {
     const scheduledDate = dayDates[dayId] ?? existingDate;

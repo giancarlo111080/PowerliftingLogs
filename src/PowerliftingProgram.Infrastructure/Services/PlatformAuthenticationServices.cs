@@ -61,7 +61,8 @@ public sealed class JwtTokenService(IConfiguration configuration)
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(ClaimTypes.Email, user.Email),
             new(ClaimTypes.Name, user.DisplayName),
-            new(ClaimTypes.Role, user.Role.ToString().ToUpperInvariant())
+            new(ClaimTypes.Role, user.Role.ToString().ToUpperInvariant()),
+            new("session_version", user.SessionVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
         };
         if (user.CoachId is Guid coachId)
         {

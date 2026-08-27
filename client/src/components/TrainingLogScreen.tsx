@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Pencil, Plus, Send, Trash2, X } from "lucide-react-native";
+import { Activity, CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Pencil, Plus, Send, Trash2, X } from "lucide-react-native";
 
 import { useSession } from "../auth/AuthSessionContext";
 import { type ProgramDay, type ProgramDaySetLog, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 import { InstagramLinkModal } from "./InstagramLinkModal";
 import { TrainingLogSchedulePanel } from "./TrainingLogSchedulePanel";
+import { VideoAnalysisModal } from "./VideoAnalysisModal";
+import type { VideoAnalysisTarget } from "./VideoAnalysisModal.types";
+import type { LiftVideoAnalysis, PrimaryLift } from "../lib/liftAnalysis";
 
 interface ScheduledDay {
   weekId: string;
@@ -56,6 +59,10 @@ function prescriptionLabel(exercise: ProgramDay["exercises"][number]) {
 
 function getSetLog(logs: ProgramDaySetLog[], exerciseId: string, setNumber: number) {
   return logs.find((log) => log.exerciseId === exerciseId && log.setNumber === setNumber);
+}
+
+function analysisMetric(value: number | null, suffix: string) {
+  return value === null ? "Not captured" : `${value.toFixed(1)}${suffix}`;
 }
 
 function SetStatusIcon({ status }: { status: "pending" | "done" | "skipped" }) {
@@ -266,12 +273,13 @@ function CoachLiveLogControls({ program, selectedEntry, onAddWorkout, onProgramD
 
 export function TrainingLogScreen() {
   const { session, currentProfile, activeAthlete } = useSession();
-  const { programs, comments, dayLogs, isLoading, addDay, addExercise, logDaySet, updateDaySetInstagramLink, updateDayRating, addComment } = useProgramWorkspaceStore();
+  const { programs, comments, dayLogs, isLoading, addDay, addExercise, logDaySet, updateDaySetInstagramLink, updateDaySetVideoAnalysis, updateDayRating, addComment } = useProgramWorkspaceStore();
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
   const [actualWeightDrafts, setActualWeightDrafts] = useState<Record<string, string>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [instagramTarget, setInstagramTarget] = useState<InstagramTarget | null>(null);
+  const [isVideoAnalysisOpen, setIsVideoAnalysisOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isAddingWorkout, setIsAddingWorkout] = useState(false);
   const [workoutDraft, setWorkoutDraft] = useState<WorkoutDraft>({ name: "", focus: "", scheduledDate: "" });
@@ -291,9 +299,21 @@ export function TrainingLogScreen() {
   const dayLog = selectedEntry && selectedProgram ? dayLogs.find((entry) => entry.programId === selectedProgram.id && entry.dayId === selectedEntry.day.id) : undefined;
   const selectedDayComments = selectedEntry && selectedProgram ? comments.filter((comment) => comment.programId === selectedProgram.id && comment.dayId === selectedEntry.day.id).sort((left, right) => left.createdAt.localeCompare(right.createdAt)) : [];
   const commentDraft = selectedEntry ? commentDrafts[selectedEntry.day.id] ?? "" : "";
+  const analysisTargets: VideoAnalysisTarget[] = selectedEntry ? selectedEntry.day.exercises.filter((exercise) => exercise.category !== "accessory").flatMap((exercise) => Array.from({ length: exercise.sets }, (_, index) => {
+    const setNumber = index + 1;
+    const existingAnalysis = getSetLog(dayLog?.sets ?? [], exercise.id, setNumber)?.videoAnalysis;
+    return { exerciseId: exercise.id, exerciseName: exercise.name, liftType: exercise.category as PrimaryLift, prescribedRepetitions: exercise.repetitions, setNumber, videoAnalysis: existingAnalysis?.liftType === exercise.category ? existingAnalysis : undefined };
+  })) : [];
+  const savedAnalysisTargets = analysisTargets.filter((target) => Boolean(target.videoAnalysis));
 
-  if (!session || !currentProfile || !athlete) {
+  if (!session || !currentProfile) {
     return <AppShell title="Training Log"><View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /></View></AppShell>;
+  }
+  if (isCoach && !activeAthlete) {
+    return <AppShell title="Training Log"><View className="flex-1 items-center justify-center px-5"><Text className="font-serif text-lg font-bold text-ink">No athlete selected</Text><Text className="mt-2 max-w-md text-center font-serif text-sm leading-6 text-muted">Link an athlete to this coach account, or select an available athlete from the sidebar.</Text></View></AppShell>;
+  }
+  if (!athlete) {
+    return null;
   }
 
   function selectProgram(program: TrainingProgram) {
@@ -417,6 +437,14 @@ export function TrainingLogScreen() {
     setMessage("Instagram link added to this set.");
   }
 
+  async function saveVideoAnalysis(target: VideoAnalysisTarget, videoAnalysis: LiftVideoAnalysis) {
+    if (!selectedProgram || !selectedEntry) {
+      return;
+    }
+    await updateDaySetVideoAnalysis(selectedProgram.id, selectedEntry.day.id, target.exerciseId, target.setNumber, videoAnalysis);
+    setMessage(`${target.exerciseName}, set ${target.setNumber} now has a local video analysis.`);
+  }
+
   async function saveRating(rating: number) {
     if (!selectedProgram || !selectedEntry || isCoach) {
       return;
@@ -439,6 +467,7 @@ export function TrainingLogScreen() {
       <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-6 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
         <View className="flex-col gap-3 border-l-4 border-signal pl-4 sm:flex-row sm:items-end sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{isCoach ? "Athlete training log" : "Your program"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">{isCoach ? `${athlete.displayName}'s workouts` : "Training Log"}</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{isCoach ? "Navigate every workout, review actual loads and footage, then leave feedback in context." : "Every scheduled workout, actual set, video, rating, and coach note lives here."}</Text></View>{selectedProgram ? <View className="flex-row items-center gap-2"><CalendarDays size={18} color="#2E6F5E" /><Text className="font-serif text-sm font-bold text-ink">{scheduledDays.length} workout{scheduledDays.length === 1 ? "" : "s"}</Text></View> : null}</View>
         {selectedEntry && selectedProgram ? <TrainingLogSchedulePanel key={selectedEntry.day.id} programId={selectedProgram.id} weekId={selectedEntry.weekId} weekName={selectedEntry.weekName} day={selectedEntry.day} actorRole={session.role === "COACH" ? "coach" : "lifter"} /> : null}
+        {selectedEntry && selectedProgram && analysisTargets.length ? <View className="border border-fog bg-paper p-4"><View className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Technique review</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Analyze original lift footage</Text><Text className="mt-1 font-serif text-sm leading-6 text-muted">Browser-local AI pose analysis supports squat, bench, and deadlift sets. Accessories are excluded. The source video is never uploaded or saved.</Text></View><Pressable className="min-h-11 flex-row items-center justify-center gap-2 bg-ink px-4 py-3" onPress={() => setIsVideoAnalysisOpen(true)} accessibilityLabel="Analyze a lift video"><Activity size={17} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Analyze lift</Text></Pressable></View>{savedAnalysisTargets.length ? <View className="mt-4 flex-row flex-wrap gap-2 border-t border-fog pt-4">{savedAnalysisTargets.map((target) => <View key={`${target.exerciseId}-${target.setNumber}`} className="min-w-44 flex-1 border border-fog bg-canvas px-3 py-2"><Text className="font-serif text-xs font-bold text-ink">{target.exerciseName} · Set {target.setNumber}</Text><Text className="mt-1 font-mono text-xs text-muted">{analysisMetric(target.videoAnalysis?.meanConcentricVelocityMps ?? null, " m/s")} · Est. RPE {analysisMetric(target.videoAnalysis?.confidence === "low" ? null : target.videoAnalysis?.estimatedRpe ?? null, "")}</Text></View>)}</View> : null}</View> : null}
         {isCoach && selectedProgram ? <CoachLiveLogControls program={selectedProgram} selectedEntry={selectedEntry} onAddWorkout={openWorkoutCreator} onProgramDeleted={() => { setSelectedProgramId(null); setSelectedDayId(null); setMessage("Live program removed."); }} onWeekDeleted={(weekId) => { if (selectedEntry?.weekId === weekId) setSelectedDayId(null); setMessage("Week removed from the live program."); }} onDayDeleted={(dayId) => { if (selectedEntry?.day.id === dayId) setSelectedDayId(null); setMessage("Workout removed from the live program."); }} /> : null}
         {message ? <View className="border border-moss bg-[#2E6F5E12] px-4 py-3"><Text className="font-serif text-sm text-moss">{message}</Text></View> : null}
         {isLoading ? <View className="items-center border border-fog bg-paper py-12"><ActivityIndicator color="#2E6F5E" /><Text className="mt-3 font-serif text-sm text-[#52675F]">Loading training logs</Text></View> : null}
@@ -464,6 +493,7 @@ export function TrainingLogScreen() {
         {!isLoading && !athletePrograms.length ? <View className="items-center border border-fog bg-paper px-5 py-12"><CalendarDays size={25} color="#688078" /><Text className="mt-3 font-serif text-base font-bold text-ink">No training program available</Text><Text className="mt-1 text-center font-serif text-sm text-[#52675F]">{isCoach ? "Create a program for the selected athlete before opening logs." : "Your coach has not assigned a program yet."}</Text></View> : null}
       </ScrollView>
       <InstagramLinkModal visible={instagramTarget !== null} exerciseName={instagramTarget ? `${instagramTarget.exerciseName} · set ${instagramTarget.setNumber}` : ""} onClose={() => setInstagramTarget(null)} onSave={saveInstagramLink} />
+      <VideoAnalysisModal visible={isVideoAnalysisOpen} targets={analysisTargets} onClose={() => setIsVideoAnalysisOpen(false)} onSave={saveVideoAnalysis} />
     </AppShell>
   );
 }

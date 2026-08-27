@@ -187,8 +187,8 @@ public static class TrainingDatabaseSeeder
 
     private static async Task SeedTestAccountsAsync(TrainingDbContext database, PasswordHashingService passwordHashingService, CancellationToken cancellationToken)
     {
-        const string coachEmail = "giancarlojavier22@gmail.com";
-        const string athleteEmail = "giancarlomallarejavier22@gmail.com";
+        const string coachEmail = "coach@ironforge.local";
+        const string athleteEmail = "athlete@ironforge.local";
         var coach = await database.PlatformUsers.SingleOrDefaultAsync(user => user.NormalizedEmail == coachEmail.ToUpperInvariant(), cancellationToken);
         if (coach is null)
         {
@@ -197,8 +197,8 @@ public static class TrainingDatabaseSeeder
                 Id = Guid.Parse("6c425454-2eb1-4d42-942f-4f628600cfbd"),
                 Email = coachEmail,
                 NormalizedEmail = coachEmail.ToUpperInvariant(),
-                DisplayName = "Giancarlo Javier",
-                PasswordHash = passwordHashingService.Hash("imthecoach"),
+                DisplayName = "Demo Coach",
+                PasswordHash = passwordHashingService.Hash("LocalDemoCoach!2026"),
                 Role = PlatformRole.Coach
             };
             database.PlatformUsers.Add(coach);
@@ -212,8 +212,8 @@ public static class TrainingDatabaseSeeder
                 Id = Guid.Parse("822775a1-357c-4d48-894b-54598f4945a4"),
                 Email = athleteEmail,
                 NormalizedEmail = athleteEmail.ToUpperInvariant(),
-                DisplayName = "Gee Javier",
-                PasswordHash = passwordHashingService.Hash("1234567!@#$%"),
+                DisplayName = "Demo Athlete",
+                PasswordHash = passwordHashingService.Hash("LocalDemoAthlete!2026"),
                 Role = PlatformRole.Athlete,
                 CoachId = coach.Id
             };

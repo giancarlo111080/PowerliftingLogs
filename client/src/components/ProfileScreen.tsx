@@ -3,7 +3,9 @@ import { Pressable, ScrollView, Switch, Text, TextInput, View } from "react-nati
 import { Bell, CalendarDays, ClipboardCheck, Pencil, Save, Trophy, Users, X } from "lucide-react-native";
 
 import { useSession } from "../auth/AuthSessionContext";
-import { achievements } from "../data/dashboardData";
+import { formatTonnage, getCoachReviewItems } from "../data/dashboardData";
+import { getProgramAnalytics } from "../data/programAnalytics";
+import { useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 
 interface ProfileDraft {
@@ -38,8 +40,13 @@ function Detail({ label, value }: { label: string; value: string }) {
   return <View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-[#688078]">{label}</Text><Text className="mt-1 font-serif text-base font-bold text-ink">{value}</Text></View>;
 }
 
+function kilograms(value: number | undefined) {
+  return value === undefined ? "Not set" : `${value} kg`;
+}
+
 export function ProfileScreen() {
-  const { currentProfile, session, updateCurrentProfile } = useSession();
+  const { currentProfile, session, profiles, updateCurrentProfile } = useSession();
+  const { programs, dayLogs, comments } = useProgramWorkspaceStore();
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
@@ -55,6 +62,18 @@ export function ProfileScreen() {
   }
 
   const isLifter = session.role === "ATHLETE";
+  const athletePrograms = isLifter ? programs.filter((program) => program.athleteId === currentProfile.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)) : [];
+  const activeProgram = athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
+  const analytics = getProgramAnalytics(activeProgram, dayLogs);
+  const achievements: Array<{ code: string; title: string; detail: string }> = [];
+  if (analytics.completedSets > 0) {
+    achievements.push({ code: "logged-sets", title: `${analytics.completedSets} sets logged`, detail: `${formatTonnage(analytics.completedTonnageKg)} completed in ${activeProgram?.name ?? "the current program"}` });
+  }
+  if (analytics.plannedSets > 0 && analytics.remainingSets === 0) {
+    achievements.push({ code: "program-complete", title: "Program complete", detail: "Every prescribed set has been handled" });
+  }
+  const assignedAthleteCount = profiles.filter((profile) => profile.role === "ATHLETE").length;
+  const reviewWorkload = getCoachReviewItems(profiles, programs, dayLogs, comments).length;
 
   function updateDraft(field: keyof ProfileDraft, value: string) {
     setDraft((current) => current ? { ...current, [field]: value } : current);
@@ -122,9 +141,9 @@ export function ProfileScreen() {
             {isLifter ? <><View className="flex-col gap-0 sm:flex-row sm:gap-4"><View className="flex-1"><EditableField label="Body weight (kg)" value={draft.bodyWeightKg} onChangeText={(value) => updateDraft("bodyWeightKg", value)} keyboardType="decimal-pad" /></View><View className="flex-1"><EditableField label="Weight class" value={draft.competitionWeightClass} onChangeText={(value) => updateDraft("competitionWeightClass", value)} /></View></View><View className="flex-col gap-0 sm:flex-row sm:gap-4"><View className="flex-1"><EditableField label="Squat 1RM (kg)" value={draft.squatOneRepMaxKg} onChangeText={(value) => updateDraft("squatOneRepMaxKg", value)} keyboardType="decimal-pad" /></View><View className="flex-1"><EditableField label="Bench 1RM (kg)" value={draft.benchOneRepMaxKg} onChangeText={(value) => updateDraft("benchOneRepMaxKg", value)} keyboardType="decimal-pad" /></View><View className="flex-1"><EditableField label="Deadlift 1RM (kg)" value={draft.deadliftOneRepMaxKg} onChangeText={(value) => updateDraft("deadliftOneRepMaxKg", value)} keyboardType="decimal-pad" /></View></View><EditableField label="Active block" value={draft.activeBlock} onChangeText={(value) => updateDraft("activeBlock", value)} /><EditableField label="Upcoming meet" value={draft.upcomingMeet} onChangeText={(value) => updateDraft("upcomingMeet", value)} /></> : <Text className="font-serif text-sm leading-6 text-[#52675F]">Coach assignment totals are managed by the coaching workspace. You can update your display identity and notification preference below.</Text>}
           </View>
         ) : isLifter ? (
-          <View className="gap-5"><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Competition profile</Text><View className="mt-5 flex-col gap-5 lg:flex-row"><Detail label="Body weight" value={`${currentProfile.bodyWeightKg} kg`} /><Detail label="Sex" value={currentProfile.sex ?? "Not set"} /><Detail label="Weight class" value={currentProfile.competitionWeightClass ?? "Not set"} /><Detail label="Current block" value={currentProfile.activeBlock ?? "Not set"} /><Detail label="Upcoming meet" value={currentProfile.upcomingMeet ?? "Not set"} /></View></View><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Main lift baselines</Text><View className="mt-5 flex-col gap-5 sm:flex-row"><Detail label="Squat" value={`${currentProfile.squatOneRepMaxKg} kg`} /><Detail label="Bench press" value={`${currentProfile.benchOneRepMaxKg} kg`} /><Detail label="Deadlift" value={`${currentProfile.deadliftOneRepMaxKg} kg`} /></View></View><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Progress record</Text><Text className="mt-1 font-serif text-xl font-bold text-ink">Achievements</Text><View className="mt-3 border border-fog bg-paper">{achievements.map((achievement, index) => <View key={achievement.code} className={`flex-row items-center gap-3 px-4 py-4 ${index ? "border-t border-fog" : ""}`}><Trophy size={18} color="#A36F05" /><View className="flex-1"><Text className="font-serif text-sm font-bold text-ink">{achievement.title}</Text><Text className="mt-0.5 font-serif text-xs text-[#52675F]">{achievement.detail}</Text></View></View>)}</View></View></View>
+          <View className="gap-5"><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Competition profile</Text><View className="mt-5 flex-col gap-5 lg:flex-row"><Detail label="Body weight" value={kilograms(currentProfile.bodyWeightKg)} /><Detail label="Sex" value={currentProfile.sex ?? "Not set"} /><Detail label="Weight class" value={currentProfile.competitionWeightClass ?? "Not set"} /><Detail label="Current block" value={currentProfile.activeBlock ?? "Not set"} /><Detail label="Upcoming meet" value={currentProfile.upcomingMeet ?? "Not set"} /></View></View><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Main lift baselines</Text><View className="mt-5 flex-col gap-5 sm:flex-row"><Detail label="Squat" value={kilograms(currentProfile.squatOneRepMaxKg)} /><Detail label="Bench press" value={kilograms(currentProfile.benchOneRepMaxKg)} /><Detail label="Deadlift" value={kilograms(currentProfile.deadliftOneRepMaxKg)} /></View></View><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Progress record</Text><Text className="mt-1 font-serif text-xl font-bold text-ink">Achievements</Text><View className="mt-3 border border-fog bg-paper">{achievements.length ? achievements.map((achievement, index) => <View key={achievement.code} className={`flex-row items-center gap-3 px-4 py-4 ${index ? "border-t border-fog" : ""}`}><Trophy size={18} color="#A36F05" /><View className="flex-1"><Text className="font-serif text-sm font-bold text-ink">{achievement.title}</Text><Text className="mt-0.5 font-serif text-xs text-[#52675F]">{achievement.detail}</Text></View></View>) : <View className="px-4 py-6"><Text className="font-serif text-sm font-bold text-ink">No achievements yet</Text><Text className="mt-1 font-serif text-xs text-[#52675F]">Completed training will build this progress record.</Text></View>}</View></View></View>
         ) : (
-          <View className="gap-5"><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Coaching workload</Text><View className="mt-5 flex-col gap-5 sm:flex-row"><View className="flex-1"><Users size={21} color="#2E6F5E" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">{currentProfile.assignedAthleteCount}</Text><Text className="font-serif text-sm text-[#52675F]">assigned athletes</Text></View><View className="flex-1"><ClipboardCheck size={21} color="#D74F32" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">{currentProfile.reviewWorkload}</Text><Text className="font-serif text-sm text-[#52675F]">reviews waiting</Text></View><View className="flex-1"><CalendarDays size={21} color="#17212B" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">This week</Text><Text className="font-serif text-sm text-[#52675F]">program check-in window</Text></View></View></View></View>
+          <View className="gap-5"><View className="border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Coaching workload</Text><View className="mt-5 flex-col gap-5 sm:flex-row"><View className="flex-1"><Users size={21} color="#2E6F5E" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">{assignedAthleteCount}</Text><Text className="font-serif text-sm text-[#52675F]">assigned athletes</Text></View><View className="flex-1"><ClipboardCheck size={21} color="#D74F32" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">{reviewWorkload}</Text><Text className="font-serif text-sm text-[#52675F]">reviews waiting</Text></View><View className="flex-1"><CalendarDays size={21} color="#17212B" /><Text className="mt-2 font-serif text-3xl font-bold text-ink">This week</Text><Text className="font-serif text-sm text-[#52675F]">program check-in window</Text></View></View></View></View>
         )}
 
         <View className="border border-fog bg-paper p-5"><View className="flex-row items-center justify-between"><View className="flex-row items-center gap-3"><View className="h-10 w-10 items-center justify-center rounded-md bg-[#2E6F5E1A]"><Bell size={19} color="#2E6F5E" /></View><View><Text className="font-serif text-base font-bold text-ink">Review notifications</Text><Text className="mt-0.5 font-serif text-xs text-[#52675F]">New messages, form flags, and submitted footage</Text></View></View><Switch value={currentProfile.notificationsEnabled} onValueChange={(value) => void updateCurrentProfile({ notificationsEnabled: value })} trackColor={{ false: "#DDE5E1", true: "#2E6F5E" }} accessibilityLabel="Toggle review notifications" /></View></View>

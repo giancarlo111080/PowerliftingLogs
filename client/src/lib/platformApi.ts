@@ -67,10 +67,7 @@ const staticDemoAccounts: Array<{ password: string; account: AccountResponse }> 
 ];
 
 const staticDemoAthletes: CoachAthleteResponse[] = [
-  { athleteProfileId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9", userId: "platform-alex-morgan", displayName: "Alex Morgan", email: staticDemoCredentials.athlete.email },
-  { athleteProfileId: "4ef9844a-37de-42f6-bd31-ad587265ee90", userId: "platform-jordan-lee", displayName: "Jordan Lee", email: "jordan@ironforge.demo" },
-  { athleteProfileId: "270e0142-a437-44bc-9dcd-dd43676fd4b0", userId: "platform-mina-patel", displayName: "Mina Patel", email: "mina@ironforge.demo" },
-  { athleteProfileId: "f0be3194-989f-4a36-9c8f-9c27eaf7e3da", userId: "platform-sam-rivera", displayName: "Sam Rivera", email: "sam@ironforge.demo" }
+  { athleteProfileId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9", userId: "platform-alex-morgan", displayName: "Alex Morgan", email: staticDemoCredentials.athlete.email }
 ];
 
 function staticDemoToken(account: AccountResponse) {
@@ -98,8 +95,9 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
   if (!response.ok) {
     let message = "The Iron Forge server could not complete this request.";
     try {
-      const payload = await response.json() as { title?: string; detail?: string };
-      message = payload.detail ?? payload.title ?? message;
+      const payload = await response.json() as { title?: string; detail?: string; errors?: Record<string, string[]> };
+      const validationMessage = payload.errors ? Object.values(payload.errors).flat().find(Boolean) : undefined;
+      message = validationMessage ?? payload.detail ?? payload.title ?? message;
     }
     catch {
     }
@@ -156,4 +154,18 @@ export function createAthleteInvitation(accessToken: string, email: string) {
     return staticDemoError("Coach invitations require the hosted API.");
   }
   return request<{ id: string; recipientEmail: string; expiresAt: string; registrationUrl: string }>("/api/coach/athlete-invitations", { method: "POST", body: JSON.stringify({ email }) }, accessToken);
+}
+
+export function requestPasswordReset(email: string) {
+  if (isStaticDemo) {
+    return staticDemoError("Password reset is unavailable for fixed demo accounts. Use a demo workspace button to sign in.");
+  }
+  return request<{ message: string }>("/api/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email }) });
+}
+
+export function completePasswordReset(token: string, password: string) {
+  if (isStaticDemo) {
+    return staticDemoError("Password reset is unavailable for fixed demo accounts.");
+  }
+  return request<void>("/api/auth/password-reset/complete", { method: "POST", body: JSON.stringify({ token, password }) });
 }

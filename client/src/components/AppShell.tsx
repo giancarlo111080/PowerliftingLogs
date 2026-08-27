@@ -38,6 +38,7 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
   const { session, currentProfile, activeAthlete, profiles, logout, selectAthlete } = useSession();
   const { theme, toggleTheme } = useThemePreference();
   const [isAthletePickerOpen, setIsAthletePickerOpen] = useState(false);
+  const mutedIconColor = theme === "dark" ? "#ABB5C8" : "#52607A";
 
   if (!session || !currentProfile) {
     return null;
@@ -85,15 +86,15 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
             accessibilityLabel="Choose athlete to review"
           >
             <View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{activeAthlete?.initials ?? "AM"}</Text></View>
-            <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{activeAthlete?.displayName ?? "Athlete"}</Text><Text className="font-serif text-xs text-[#ABB5C8]">Active athlete</Text></View>
-            <ChevronDown size={16} color="#ABB5C8" />
+            <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{activeAthlete?.displayName ?? "Athlete"}</Text><Text className="font-serif text-xs text-muted">Active athlete</Text></View>
+            <ChevronDown size={16} color={mutedIconColor} />
           </Pressable>
           {isAthletePickerOpen ? (
             <View className="border-x border-b border-fog bg-paper py-1">
               {coachAthletes.map((athlete) => (
                 <Pressable key={athlete.id} className="px-3 py-2.5 active:bg-canvas" onPress={() => chooseAthlete(athlete.id)}>
                   <Text className="font-serif text-sm font-bold text-ink">{athlete.displayName}</Text>
-                  <Text className="font-serif text-xs text-[#ABB5C8]">{athlete.activeBlock ?? "Current training block"}</Text>
+                  <Text className="font-serif text-xs text-muted">{athlete.activeBlock ?? "Current training block"}</Text>
                 </Pressable>
               ))}
             </View>
@@ -111,7 +112,7 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
               onPress={() => navigate(href)}
               accessibilityLabel={`Open ${label}`}
             >
-              <Icon size={18} color={isActive ? "#FFFFFF" : "#ABB5C8"} />
+              <Icon size={18} color={isActive ? "#FFFFFF" : mutedIconColor} />
               <Text className={`font-serif text-sm font-bold ${isActive ? "text-white" : "text-ink"}`}>{label}</Text>
             </Pressable>
           );
@@ -125,7 +126,7 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
         </Pressable>
         <View className="mb-3 flex-row items-center px-2">
           <View className="h-9 w-9 items-center justify-center rounded-md bg-signal"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View>
-          <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{currentProfile.displayName}</Text><Text className="font-serif text-xs capitalize text-[#ABB5C8]">{session.role}</Text></View>
+          <View className="ml-2 flex-1"><Text className="font-serif text-sm font-bold text-ink">{currentProfile.displayName}</Text><Text className="font-serif text-xs capitalize text-muted">{session.role}</Text></View>
         </View>
         <Pressable className="min-h-10 flex-row items-center gap-3 px-3 py-2 active:bg-canvas" onPress={signOut} accessibilityLabel="Log out">
           <LogOut size={17} color="#FF3B45" />
@@ -139,8 +140,10 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
 export function AppShell({ title, children }: AppShellProps) {
   const { width } = useWindowDimensions();
   const { session, currentProfile } = useSession();
+  const { theme } = useThemePreference();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const isDesktop = width >= 960;
+  const surfaceIconColor = theme === "dark" ? "#F5F7FB" : "#111827";
 
   if (!session || !currentProfile) {
     return <Redirect href="/" />;
@@ -154,10 +157,10 @@ export function AppShell({ title, children }: AppShellProps) {
           <View className="flex-row items-center gap-3">
             {!isDesktop ? (
               <Pressable className="h-10 w-10 items-center justify-center border border-fog" onPress={() => setIsMenuOpen(true)} accessibilityLabel="Open navigation menu">
-                <Menu size={20} color="#F5F7FB" />
+                <Menu size={20} color={surfaceIconColor} />
               </Pressable>
             ) : null}
-            <View><Text className="font-serif text-xl font-bold text-ink">{title}</Text><Text className="font-serif text-xs text-[#ABB5C8]">{session.role === "COACH" ? "Coach workspace" : "Athlete workspace"}</Text></View>
+            <View><Text className="font-serif text-xl font-bold text-ink">{title}</Text><Text className="font-serif text-xs text-muted">{session.role === "COACH" ? "Coach workspace" : "Athlete workspace"}</Text></View>
           </View>
           <View className="flex-row items-center gap-2"><View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View><Text className="hidden font-serif text-sm font-bold text-ink sm:flex">{currentProfile.displayName}</Text></View>
         </View>
@@ -168,7 +171,7 @@ export function AppShell({ title, children }: AppShellProps) {
         <View className="flex-1 flex-row bg-black/40">
           <Sidebar isDrawer onNavigate={() => setIsMenuOpen(false)} />
           <Pressable className="flex-1" onPress={() => setIsMenuOpen(false)} accessibilityLabel="Close navigation menu">
-            <View className="items-end p-4"><View className="h-10 w-10 items-center justify-center rounded-md bg-paper"><X size={20} color="#F5F7FB" /></View></View>
+            <View className="items-end p-4"><View className="h-10 w-10 items-center justify-center rounded-md bg-paper"><X size={20} color={surfaceIconColor} /></View></View>
           </Pressable>
         </View>
       </Modal>

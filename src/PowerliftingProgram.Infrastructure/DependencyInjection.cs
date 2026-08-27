@@ -33,7 +33,9 @@ public static class DependencyInjection
         services.AddSingleton<PasswordHashingService>();
         services.AddSingleton<JwtTokenService>();
         services.AddHttpClient(nameof(ResendInvitationEmailService));
+        services.AddHttpClient(nameof(ResendPasswordResetEmailService));
         services.AddScoped<IInvitationEmailService, ResendInvitationEmailService>();
+        services.AddScoped<IPasswordResetEmailService, ResendPasswordResetEmailService>();
         services.AddSingleton<InstagramVideoUrlPolicy>();
         return services;
     }

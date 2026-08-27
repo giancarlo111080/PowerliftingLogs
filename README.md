@@ -6,7 +6,9 @@ A local-first powerlifting and athletic coaching platform. The repository contai
 
 Iron Forge is dark by default, with charcoal surfaces, chalk text, Iron Crimson actions, zinc highlights, industrial display headings, and monospaced training data. The Expo client uses explicit `COACH` and `ATHLETE` roles. A server-issued JWT is stored only for the authenticated session; client navigation guards keep athletes out of master-program screens, while API guards ensure a coach can access only athletes linked to that coach.
 
-Registration is open for independent coaches and athletes at `/register`. A coach can also generate an athlete invitation from the Dashboard. The API hashes a one-time 256-bit invite token, expires it after 48 hours, sends the branded **Your Coach has invited you to Iron Forge** email through Resend when `Email__Resend__ApiKey` is configured, and forces invite-based registration to create an `ATHLETE` linked to the issuing coach. With no Resend key in local development, the invitation URL is logged by the API and returned only to the authenticated issuing coach.
+Registration is open for independent coaches and athletes at `/register`. A coach can also generate an athlete invitation from the Dashboard. The API hashes a one-time 256-bit invite token, expires it after 48 hours, sends the branded **Your Coach has invited you to Iron Forge** email through Resend when `Email__Resend__ApiKey` is configured, and forces invite-based registration to create an `ATHLETE` linked to the issuing coach. With no Resend key in local development, email delivery is skipped and the invitation URL is returned only to the authenticated issuing coach; bearer invitation URLs are never written to application logs.
+
+The sign-in screen also offers **Forgot password?**. Reset requests always return the same response so account existence is not disclosed. For an existing account, the API emails a hashed, single-use reset token that expires after one hour. Completing a reset revokes previously issued sessions. Set `Client__PasswordResetUrl` to the public client callback, such as `https://app.example.com/reset-password`, and configure Resend for delivery. Fixed GitHub Pages demo accounts do not support password changes.
 
 The coach-only **Programs** route manages reusable master templates: `Template -> Weeks -> Days -> Exercises -> Sets x Reps @ RPE / %1RM / exact load`. Assigning a template clones it into a dated, active live training log for exactly one linked athlete. The master template is unchanged afterward; coaches can update a live training day through the API without mutating the source template. In Training Log, athletes record completed loads, reps, and statuses, and coaches can review and adjust the assigned work.
 
@@ -94,19 +96,21 @@ Install the following before starting:
 - Node.js 20 LTS and npm
 - Android Studio or Xcode only when running a native simulator
 
-### Temporary Mock Database
+### Temporary In-Memory Database
 
 `Development` uses EF Core's InMemory provider. It creates a transient database named `powerlifting-program-development` and loads a deterministic athlete, active block, Week 4 / Day 1 workout, completed/pending sets, coach feedback, an Instagram link, a sync command, and an achievement. The data exists only while the API process is running.
 
 1. Restore packages with `dotnet restore PowerliftingProgram.sln`.
-2. Run the API with `dotnet run --project src/PowerliftingProgram.Api --urls http://localhost:5080`.
+2. Run the API with `dotnet run --project src/PowerliftingProgram.Api --launch-profile "PowerliftingProgram.Api (Temporary In-Memory)"`.
 3. Open `http://localhost:5080/scalar/v1` and exercise the API against the seeded mock data.
 
-The committed launch profile sets `ASPNETCORE_ENVIRONMENT=Development`, so Visual Studio, Rider, and `dotnet run` use mock mode by default. No Docker or PostgreSQL installation is required for this path.
+This mode is intentionally temporary: registrations and training data disappear whenever the API process stops. The standard `PowerliftingProgram.Api` launch profile uses persistent PostgreSQL instead.
 
-### Create PostgreSQL and Test Data
+Local sample accounts are `coach@ironforge.local` / `LocalDemoCoach!2026` and `athlete@ironforge.local` / `LocalDemoAthlete!2026`. Sample seeding is blocked outside the `Development` and `LocalPostgres` environments.
 
-The durable PostgreSQL schema is defined by EF migrations `20260827000000_InitialCreate` and `20260828000000_AddCoachingPlatform`. Together they create the athlete, account, coach invitation, master-template, live-training, set logging, comment, achievement, and synchronization-ledger tables. `database/scripts/seed-test-data.sql` is an idempotent fixture matching the mock dataset.
+### Create the Persistent PostgreSQL Database
+
+The durable PostgreSQL schema is defined by the migrations in `PowerliftingProgram.Infrastructure/Persistence/Migrations`, including the coaching platform and password-reset account fields. `database/scripts/seed-test-data.sql` is an optional idempotent fixture matching the mock dataset.
 
 1. Install Docker Desktop and the EF CLI once: `dotnet tool install --global dotnet-ef`.
    On Windows with WinGet, install Docker Desktop with `winget install -e --id Docker.DockerDesktop`, launch Docker Desktop, complete its setup, and reopen PowerShell so `docker --version` succeeds.
@@ -116,13 +120,12 @@ The durable PostgreSQL schema is defined by EF migrations `20260827000000_Initia
    .\database\scripts\Initialize-LocalPostgres.ps1
    ```
 
-3. The script starts the PostgreSQL container, applies EF migrations, and loads test data. The database is `powerlifting_program` at `localhost:5432`, with the `powerlifting` user and password configured in `docker-compose.yml`.
-4. To create only the tables and skip sample data, run `./database/scripts/Initialize-LocalPostgres.ps1 -SkipSampleData`.
-5. To run the API against PostgreSQL, set the environment before starting it:
+3. The script starts the PostgreSQL container and applies every EF migration without adding sample users. The database is `powerlifting_program` at `localhost:5432`, with the `powerlifting` user and password configured in `docker-compose.yml`.
+4. To load the optional fixture accounts and training records, run `./database/scripts/Initialize-LocalPostgres.ps1 -SeedSampleData`.
+5. Start the API with the standard persistent profile:
 
    ```powershell
-   $env:ASPNETCORE_ENVIRONMENT = "LocalPostgres"
-   dotnet run --project src/PowerliftingProgram.Api --urls http://localhost:5080
+   dotnet run --project src/PowerliftingProgram.Api
    ```
 
 ### Open the Local PostgreSQL Database
@@ -163,7 +166,7 @@ The `Development` environment uses an EF Core in-memory database instead. It can
 ### Run the .NET API
 
 1. Run `dotnet test PowerliftingProgram.sln` after restoring packages.
-2. Choose one database mode before starting the API: the mock mode above, or `LocalPostgres` for a durable local database.
+2. Use the standard launch profile for durable PostgreSQL. Select `PowerliftingProgram.Api (Temporary In-Memory)` only when data loss after shutdown is acceptable.
 3. To add a schema change, modify the entity/configuration, then create and apply a migration:
 
    ```powershell
@@ -174,7 +177,7 @@ The `Development` environment uses an EF Core in-memory database instead. It can
 
 4. Scalar API reference is available at `http://localhost:5080/scalar/v1` in Development and LocalPostgres.
 
-When Docker is unavailable, use the Temporary Mock Database section. It provides the same EF entity model and seed fixture for API development but does not persist data after the API stops.
+When Docker is unavailable, use the Temporary In-Memory Database section. It provides the same EF entity model and seed fixture for API development but does not persist data after the API stops.
 
 For a containerized API build, run this from the repository root:
 
@@ -195,7 +198,7 @@ docker run --rm -p 8080:8080 --env-file .env powerlifting-program-api
    ```
 
 4. Start the Expo development server with `npm run web -- --clear`, or use `npm run start` then press `w` for the web client, `a` for Android, or `i` for iOS. Use the URL shown by Expo, commonly `http://localhost:8081`.
-6. Run `npm run typecheck` before opening a pull request.
+5. Run `npm run typecheck`, `npm run lint`, and `npm run export:web` before opening a pull request. The GitHub quality workflow runs the same client checks together with the .NET build and tests.
 
 The first client visit opens a development-only proxy login. Choose `Alex Morgan` for the lifter dashboard or `Coach Taylor` for the coach dashboard. The role is saved locally, Dashboard is the first signed-in screen, and Log out clears the proxy session. Coaches can select an active athlete from the sidebar; lifters are limited to their own data. The coach-only **Programs** route presents `Program -> Weeks -> Training days -> Exercise prescriptions`: coaches create, edit, activate, and delete programs; add or remove weeks and days; add Squat, Bench, Deadlift, or accessory prescriptions; and prescribe each exercise by RPE, RIR, or an exact kg/lb load. Created programs and every later plan change are immediately available in the selected athlete's **Training Log**. Coaches can also add a dated workout day or a complete accessory prescription directly while reviewing that log. The **Program Schedule** route gives every training day a planned date: coaches set or revise dates, while lifters may move one workout or reflow every workout in a disrupted week from a new start date. The last scheduling change records whether the coach or lifter made it. The shared **Training Log** is the athlete's complete program view: either role can select a program and navigate every scheduled day using the day list or previous/next controls. Athletes enter the actual weight lifted before completing every RPE or RIR set, attach a public Instagram post or Reel to any set, and give the session a $1$–$10$ effort rating for future stress management. Both identities leave local comments directly under the selected training log. **Analytics** reads those program-day logs to render weekly completed tonnage, done/skipped/remaining set adherence, heaviest squat/bench/deadlift sets, session-rating trend, and a fatigue/readiness planning estimate. There is no standalone chat workflow. Profile edits, program edits, schedules, comments, logs, and notification choices are stored locally for development.
 
@@ -205,6 +208,8 @@ The client has a WatermelonDB schema at `client/src/data/watermelonSchema.ts` fo
 
 - `POST /api/auth/register`: registers an independent `COACH` or `ATHLETE`, or accepts a valid athlete invitation.
 - `POST /api/auth/login`: returns a JWT-backed account session.
+- `POST /api/auth/password-reset/request`: sends an enumeration-safe, one-hour password reset link when the account exists.
+- `POST /api/auth/password-reset/complete`: consumes a reset token, replaces the password, and revokes existing sessions.
 - `GET /api/auth/me`: returns the authenticated account.
 - `GET /api/auth/invitations/{token}`: validates an unexpired invitation for registration.
 - `POST /api/coach/athlete-invitations`: coach-only creation and branded email delivery of a 48-hour athlete invite.
@@ -225,40 +230,58 @@ The client has a WatermelonDB schema at `client/src/data/watermelonSchema.ts` fo
 - `GET /api/training/athletes/{athleteId}/readiness`: returns 7-day/28-day EWMA readiness.
 - `GET /api/training/days/{trainingDayId}/analytics?athleteOneRepMaxKg=...`: returns planned versus completed tonnage and stress.
 
-## GitHub Pages Static Demo
+## Free GitHub Pages Deployment
 
-GitHub Pages is a static file host. It cannot run ASP.NET Core, PostgreSQL, EF Core migrations, or a secure server-side sync API. The Pages deployment intentionally runs a separate client-only mode:
+GitHub Pages hosts the web client for free when the repository is public. It cannot run ASP.NET Core, PostgreSQL, EF Core migrations, or the secure server-side sync API. This repository therefore deploys as a fully interactive, browser-local demo unless you later connect it to an API hosted elsewhere.
 
-1. The workflow sets `EXPO_PUBLIC_STATIC_DEMO=true`.
-2. `client/src/data/localStore.ts` reads the built-in Day 1 dataset and persists all changes to browser local storage.
-3. Logging sets, calculating local e1RM values, attaching Instagram links, and viewing readiness/progress stay fully interactive without an API.
-4. Flushing the local ledger in demo mode marks its local commands processed; it never sends data to a server.
+### Publish the Demo
 
-To enable deployment:
+1. Sign in at [GitHub](https://github.com/) and create a new **public** repository. Use a simple name such as `PowerliftingLogs`, and do not add a README, `.gitignore`, or license because this folder already has them.
+2. Open PowerShell in the repository root and check whether a Git remote is already configured:
 
-1. Push this repository to GitHub.
-2. In repository **Settings**, open **Pages**.
-3. Select **GitHub Actions** as the build and deployment source.
-4. Push to `main`, or run **Deploy static demo to GitHub Pages** from the Actions tab.
-5. GitHub publishes the demo at `https://<username>.github.io/<repository-name>/`.
+   ```powershell
+   git remote -v
+   ```
 
-The workflow exports the Expo web application with a repository-aware base URL and uploads `client/dist` as the Pages artifact. It does not require API keys, database credentials, or Instagram credentials.
+3. If no remote is listed, connect the local repository to the new GitHub repository. Replace `<your-github-username>` with your GitHub username:
 
-For a real deployment, host the API container on an ASP.NET-compatible service and host PostgreSQL separately. Set the client build variable `EXPO_PUBLIC_API_URL` to the public HTTPS API origin, set API `Cors:AllowedOrigins` to the web application origin, use a managed PostgreSQL connection string via deployment secrets, and turn off automatic migrations unless the deployment process owns schema changes.
+   ```powershell
+   git branch -M main
+   git remote add origin https://github.com/<your-github-username>/PowerliftingLogs.git
+   ```
+
+4. Commit and publish the project:
+
+   ```powershell
+   git add .
+   git commit -m "Deploy Iron Forge to GitHub Pages"
+   git push -u origin main
+   ```
+
+5. On the GitHub repository page, open **Settings** > **Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+6. Open the **Actions** tab. The **Deploy static demo to GitHub Pages** workflow runs automatically whenever `main` is pushed. If it ran before Pages was enabled, open the workflow and choose **Run workflow**.
+7. When the run has a green check mark, open **Settings** > **Pages** and select the published URL. The address is `https://<your-github-username>.github.io/PowerliftingLogs/` when the repository has that name.
+
+The demo offers Coach and Athlete sign-in buttons without a server. Its programs, logs, and settings are stored only in each visitor's browser local storage. Clearing browser storage or opening the site in another browser starts a separate demo copy.
+
+### Connect a Live API Later
+
+The Pages workflow automatically chooses its mode at build time:
+
+- With no `EXPO_PUBLIC_API_URL` variable, it publishes the free browser-local demo.
+- With `EXPO_PUBLIC_API_URL` set, it publishes the web client configured to call that public HTTPS API.
+
+To use a live API, deploy the .NET API and PostgreSQL to separate hosting first. In GitHub, open **Settings** > **Secrets and variables** > **Actions** > **Variables**, create `EXPO_PUBLIC_API_URL`, and enter the API's public URL, for example `https://api.example.com`. Push to `main` or rerun the workflow after saving it.
+
+`EXPO_PUBLIC_API_URL` is public client configuration, not a secret. Keep database connection strings, JWT signing keys, and email API keys only in the API host's secret storage.
 
 ## Production Notes
 
-- Keep `Authentication__Jwt__SigningKey` in secret storage, use a random value of at least 32 characters, and rotate it on a regular production schedule.
+- Keep `Authentication__Jwt__SigningKey` in secret storage, use a random value of at least 64 bytes for HS512, and rotate it on a regular production schedule.
+- Keep `ConnectionStrings__TrainingDatabase` in secret storage. The committed PostgreSQL credentials are scoped to the explicit `LocalPostgres` environment only.
 - Set `Email__Resend__ApiKey` and a verified `Email__Resend__From` address before sending production invitations.
+- Set `Client__RegistrationUrl` and `Client__PasswordResetUrl` to the deployed client routes before sending invitations or password-reset email.
 - Terminate TLS before the API and allow only trusted CORS origins.
 - Use database backups, health checks, and managed secret injection for the production PostgreSQL connection string.
 - Keep the unique `SyncCommands.CommandId` index intact. It is the server-side replay guard for offline mutations.
 - Instagram content availability and access are controlled by Instagram and the account owner. Store links only with consent and honor applicable privacy, athlete-data, and platform policies.
-#   P o w e r l i f t i n g P r o g r a m 
- 
- 
-gee javier athlete giancarlomallarejavier22@gmail.com
-1234567!@#$%
-
-giancarlo javier coach giancarlojavier22@gmail.com
-imthecoach

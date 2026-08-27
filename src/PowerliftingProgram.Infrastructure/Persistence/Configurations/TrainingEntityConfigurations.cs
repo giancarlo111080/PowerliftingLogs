@@ -12,7 +12,11 @@ internal static class EntityConfigurationExtensions
         builder.HasKey(entity => entity.Id);
         builder.Property(entity => entity.CreatedAt).IsRequired();
         builder.Property(entity => entity.UpdatedAt).IsRequired();
-        builder.Property(entity => entity.RowVersion).IsConcurrencyToken().HasColumnType("bytea");
+        builder.Property(entity => entity.RowVersion)
+            .IsConcurrencyToken()
+            .ValueGeneratedNever()
+            .IsRequired(false)
+            .HasColumnType("bytea");
     }
 }
 
@@ -47,7 +51,9 @@ public sealed class PlatformUserConfiguration : IEntityTypeConfiguration<Platfor
         builder.Property(user => user.NormalizedEmail).HasMaxLength(320).IsRequired();
         builder.Property(user => user.DisplayName).HasMaxLength(120).IsRequired();
         builder.Property(user => user.PasswordHash).HasMaxLength(512).IsRequired();
+        builder.Property(user => user.PasswordResetTokenHash).HasMaxLength(128);
         builder.HasIndex(user => user.NormalizedEmail).IsUnique();
+        builder.HasIndex(user => user.PasswordResetTokenHash).IsUnique();
         builder.HasOne(user => user.Coach).WithMany(coach => coach.Athletes)
             .HasForeignKey(user => user.CoachId).OnDelete(DeleteBehavior.Restrict);
     }

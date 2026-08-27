@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PowerliftingProgram.Domain.Entities;
@@ -11,6 +12,9 @@ namespace PowerliftingProgram.Api.Controllers;
 
 public sealed record RegisterRequest(string DisplayName, string Email, string Password, PlatformRole Role, string? InvitationToken);
 public sealed record LoginRequest(string Email, string Password);
+public sealed record RequestPasswordResetRequest(string Email);
+public sealed record CompletePasswordResetRequest(string Token, string Password);
+public sealed record PasswordResetRequestedResponse(string Message);
 public sealed record AccountResponse(Guid Id, string DisplayName, string Email, PlatformRole Role, Guid? CoachId, Guid? AthleteProfileId);
 public sealed record SessionResponse(string AccessToken, AccountResponse Account);
 public sealed record InvitationContextResponse(string CoachName, string RecipientEmail, DateTimeOffset ExpiresAt);
@@ -20,9 +24,14 @@ public sealed record InvitationContextResponse(string CoachName, string Recipien
 public sealed class AuthenticationController(
     TrainingDbContext database,
     PasswordHashingService passwordHashingService,
-    JwtTokenService jwtTokenService) : ControllerBase
+    JwtTokenService jwtTokenService,
+    IPasswordResetEmailService passwordResetEmailService,
+    IConfiguration configuration) : ControllerBase
 {
+    private const string PasswordResetRequestedMessage = "If an account exists for that email address, a password reset link has been sent.";
+
     [AllowAnonymous]
+    [EnableRateLimiting("authentication")]
     [HttpPost("register")]
     [ProducesResponseType(typeof(SessionResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -102,11 +111,26 @@ public sealed class AuthenticationController(
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting("authentication")]
     [HttpPost("login")]
     [ProducesResponseType(typeof(SessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<SessionResponse>> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@') || request.Email.Length > 320)
+        {
+            ModelState.AddModelError(nameof(request.Email), "Provide a valid email address.");
+        }
+        if (string.IsNullOrEmpty(request.Password) || request.Password.Length > 128)
+        {
+            ModelState.AddModelError(nameof(request.Password), "Password is required and must be 128 characters or fewer.");
+        }
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
         var normalizedEmail = NormalizeEmail(request.Email);
         var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile)
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, cancellationToken);
@@ -116,6 +140,91 @@ public sealed class AuthenticationController(
         }
 
         return Ok(new SessionResponse(jwtTokenService.Create(user), ToAccountResponse(user, user.AthleteProfile?.Id)));
+    }
+
+    [AllowAnonymous]
+    [EnableRateLimiting("authentication")]
+    [HttpPost("password-reset/request")]
+    [ProducesResponseType(typeof(PasswordResetRequestedResponse), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<PasswordResetRequestedResponse>> RequestPasswordReset(
+        [FromBody] RequestPasswordResetRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@') || request.Email.Length > 320)
+        {
+            ModelState.AddModelError(nameof(request.Email), "Provide a valid email address.");
+            return ValidationProblem(ModelState);
+        }
+
+        var user = await database.PlatformUsers.SingleOrDefaultAsync(
+            candidate => candidate.NormalizedEmail == NormalizeEmail(request.Email),
+            cancellationToken);
+        if (user is not null)
+        {
+            var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+            user.PasswordResetTokenHash = HashToken(rawToken);
+            user.PasswordResetExpiresAt = DateTimeOffset.UtcNow.AddHours(1);
+            user.UpdatedAt = DateTimeOffset.UtcNow;
+            await database.SaveChangesAsync(cancellationToken);
+
+            var resetBaseUrl = configuration["Client:PasswordResetUrl"]
+                ?? throw new InvalidOperationException("Client:PasswordResetUrl is required.");
+            var resetUrl = $"{resetBaseUrl}?token={Uri.EscapeDataString(rawToken)}";
+            await passwordResetEmailService.SendAsync(user.Email, user.DisplayName, resetUrl, cancellationToken);
+        }
+
+        return Accepted(new PasswordResetRequestedResponse(PasswordResetRequestedMessage));
+    }
+
+    [AllowAnonymous]
+    [EnableRateLimiting("authentication")]
+    [HttpPost("password-reset/complete")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> CompletePasswordReset(
+        [FromBody] CompletePasswordResetRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Token) || request.Token.Length > 128)
+        {
+            ModelState.AddModelError(nameof(request.Token), "This password reset link is invalid or has expired.");
+        }
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 12 || request.Password.Length > 128)
+        {
+            ModelState.AddModelError(nameof(request.Password), "Password must contain between 12 and 128 characters.");
+        }
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        var tokenHash = HashToken(request.Token);
+        var user = await database.PlatformUsers.SingleOrDefaultAsync(
+            candidate => candidate.PasswordResetTokenHash == tokenHash && candidate.PasswordResetExpiresAt > DateTimeOffset.UtcNow,
+            cancellationToken);
+        if (user is null)
+        {
+            ModelState.AddModelError(nameof(request.Token), "This password reset link is invalid or has expired.");
+            return ValidationProblem(ModelState);
+        }
+
+        user.PasswordHash = passwordHashingService.Hash(request.Password);
+        user.PasswordResetTokenHash = null;
+        user.PasswordResetExpiresAt = null;
+        user.SessionVersion += 1;
+        user.UpdatedAt = DateTimeOffset.UtcNow;
+        try
+        {
+            await database.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            ModelState.AddModelError(nameof(request.Token), "This password reset link is invalid or has expired.");
+            return ValidationProblem(ModelState);
+        }
+
+        return NoContent();
     }
 
     [Authorize]
@@ -163,6 +272,18 @@ public sealed class AuthenticationController(
         if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 12)
         {
             ModelState.AddModelError(nameof(request.Password), "Password must contain at least 12 characters.");
+        }
+        else if (request.Password.Length > 128)
+        {
+            ModelState.AddModelError(nameof(request.Password), "Password must contain at most 128 characters.");
+        }
+        if (!Enum.IsDefined(request.Role))
+        {
+            ModelState.AddModelError(nameof(request.Role), "Select a valid account role.");
+        }
+        if (request.InvitationToken?.Length > 128)
+        {
+            ModelState.AddModelError(nameof(request.InvitationToken), "Invitation token is invalid.");
         }
     }
 

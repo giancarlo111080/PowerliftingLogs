@@ -1,0 +1,15 @@
+.git/
+.github/
+.vs/
+.vscode/
+**/bin/
+**/obj/
+client/
+database/
+tests/
+.env
+.env.*
+!.env.example
+README.md
+docker-compose.yml
+PowerliftingProgram.sln

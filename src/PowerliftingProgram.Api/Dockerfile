@@ -2,6 +2,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
 WORKDIR /app
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
+ENV DOTNET_EnableDiagnostics=0
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0-alpine AS build
 WORKDIR /src
@@ -16,4 +17,5 @@ RUN dotnet publish "src/PowerliftingProgram.Api/PowerliftingProgram.Api.csproj" 
 FROM runtime AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+USER $APP_UID
 ENTRYPOINT ["dotnet", "PowerliftingProgram.Api.dll"]

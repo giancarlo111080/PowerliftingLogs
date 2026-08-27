@@ -2,6 +2,7 @@ import type { PropsWithChildren } from "react";
 import { ScrollViewStyleReset } from "expo-router/html";
 
 export default function Root({ children }: PropsWithChildren) {
+  const baseUrl = process.env.EXPO_PUBLIC_BASE_URL?.replace(/\/+$/, "") ?? "";
   return (
     <html lang="en">
       <head>
@@ -12,8 +13,8 @@ export default function Root({ children }: PropsWithChildren) {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Nunito:wght@400;500;600;700;800;900&family=Roboto+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-        <link rel="manifest" href="./manifest.webmanifest" />
-        <script src="./sw-register.js" defer />
+        <link rel="manifest" href={`${baseUrl}/manifest.webmanifest`} />
+        <script src={`${baseUrl}/sw-register.js`} defer />
         <ScrollViewStyleReset />
       </head>
       <body>

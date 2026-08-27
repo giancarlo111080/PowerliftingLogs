@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipSampleData
+    [switch]$SeedSampleData
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +12,7 @@ $sampleDataScript = Join-Path $PSScriptRoot "seed-test-data.sql"
 $previousAspNetCoreEnvironment = $env:ASPNETCORE_ENVIRONMENT
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "Docker Desktop with Docker Compose v2 is required to create the local PostgreSQL database. Install Docker Desktop, start it, reopen PowerShell, then rerun this script. Use the Development launch profile for the temporary in-memory database without Docker."
+    throw "Docker Desktop with Docker Compose v2 is required to create the local PostgreSQL database. Install Docker Desktop, start it, reopen PowerShell, then rerun this script. Use the 'PowerliftingProgram.Api (Temporary In-Memory)' launch profile when persistence is not required."
 }
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
@@ -49,7 +49,7 @@ try {
         throw "EF Core migrations failed. The test data was not loaded. Resolve the migration error and rerun this script."
     }
 
-    if (-not $SkipSampleData) {
+    if ($SeedSampleData) {
         Get-Content -LiteralPath $sampleDataScript -Raw |
             docker compose -f $composeFile exec -T postgres psql -v ON_ERROR_STOP=1 -U powerlifting -d powerlifting_program
         if ($LASTEXITCODE -ne 0) {

@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json;
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
@@ -22,13 +23,19 @@ public sealed class SyncController(
         [FromBody] IReadOnlyList<SyncCommandRequest> commands,
         CancellationToken cancellationToken)
     {
-        if (!await CanAccessAllAthletes(commands.Select(command => command.AthleteProfileId), cancellationToken))
-        {
-            return Forbid();
-        }
         if (commands.Count is 0 or > 100)
         {
             ModelState.AddModelError(nameof(commands), "A sync batch must contain between 1 and 100 commands.");
+            return ValidationProblem(ModelState);
+        }
+        var actor = CurrentActor();
+        if (actor is null)
+        {
+            return Unauthorized();
+        }
+        if (!await CanAccessAllAthletes(commands.Select(command => command.AthleteProfileId), cancellationToken))
+        {
+            return Forbid();
         }
 
         foreach (var command in commands)
@@ -45,7 +52,7 @@ public sealed class SyncController(
             return ValidationProblem(ModelState);
         }
 
-        return Ok(await workoutSyncService.ProcessAsync(commands, cancellationToken));
+        return Ok(await workoutSyncService.ProcessAsync(commands, actor, cancellationToken));
     }
 
     [HttpPost("logged-set")]
@@ -56,6 +63,11 @@ public sealed class SyncController(
         [FromServices] IValidator<LoggedSetRequest> loggedSetValidator,
         CancellationToken cancellationToken)
     {
+        var actor = CurrentActor();
+        if (actor is null)
+        {
+            return Unauthorized();
+        }
         if (!await coachAccessService.CanAccessAthleteAsync(User, request.AthleteProfileId, cancellationToken))
         {
             return Forbid();
@@ -76,7 +88,7 @@ public sealed class SyncController(
             JsonSerializer.Serialize(request),
             Request.Headers.UserAgent.ToString() is { Length: > 0 } deviceId ? deviceId[..Math.Min(128, deviceId.Length)] : "api-client",
             DateTimeOffset.UtcNow);
-        var outcome = (await workoutSyncService.ProcessAsync([command], cancellationToken)).Single();
+        var outcome = (await workoutSyncService.ProcessAsync([command], actor, cancellationToken)).Single();
         return Ok(outcome);
     }
 
@@ -98,5 +110,15 @@ public sealed class SyncController(
             }
         }
         return true;
+    }
+
+    private SyncActor? CurrentActor()
+    {
+        var userId = CoachAccessService.CurrentUserId(User);
+        var displayName = User.FindFirst(ClaimTypes.Name)?.Value;
+        var role = User.FindFirst(ClaimTypes.Role)?.Value;
+        return userId is Guid id && !string.IsNullOrWhiteSpace(displayName) && role is "COACH" or "ATHLETE"
+            ? new SyncActor(id, displayName, role == "COACH")
+            : null;
     }
 }

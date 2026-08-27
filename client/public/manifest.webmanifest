@@ -1,9 +1,9 @@
 {
-  "name": "Powerlifting Program",
-  "short_name": "Powerlifting",
+  "name": "Iron Forge",
+  "short_name": "Iron Forge",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#F3F6F4",
-  "theme_color": "#F3F6F4",
-  "description": "Offline-first powerlifting programming and training log."
+  "background_color": "#0B1020",
+  "theme_color": "#0B1020",
+  "description": "Offline-first powerlifting coaching, programming, and training logs."
 }
