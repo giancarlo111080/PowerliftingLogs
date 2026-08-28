@@ -79,7 +79,12 @@ public sealed class SyncController(
             return ValidationProblem(ModelState);
         }
 
-        var commandType = request.CompletionStatus == Domain.Entities.SetCompletionStatus.Skipped ? "skip-set" : "log-set";
+        var commandType = request.CompletionStatus switch
+        {
+            Domain.Entities.SetCompletionStatus.Done => "log-set",
+            Domain.Entities.SetCompletionStatus.Skipped => "skip-set",
+            _ => "reset-set"
+        };
         var command = new SyncCommandRequest(
             request.IdempotencyKey,
             request.AthleteProfileId,

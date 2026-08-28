@@ -59,6 +59,25 @@ public sealed class PlatformUserConfiguration : IEntityTypeConfiguration<Platfor
     }
 }
 
+public sealed class PerformanceEventConfiguration : IEntityTypeConfiguration<PerformanceEvent>
+{
+    public void Configure(EntityTypeBuilder<PerformanceEvent> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(performanceEvent => performanceEvent.Source).HasMaxLength(80).IsRequired();
+        builder.Property(performanceEvent => performanceEvent.Provenance).HasMaxLength(500).IsRequired();
+        builder.Property(performanceEvent => performanceEvent.PayloadJson).HasColumnType("jsonb").IsRequired();
+        builder.Property(performanceEvent => performanceEvent.StableKey).HasMaxLength(160);
+        builder.HasIndex(performanceEvent => new { performanceEvent.TenantId, performanceEvent.AthleteProfileId, performanceEvent.Kind, performanceEvent.OccurredAtUtc });
+        builder.HasIndex(performanceEvent => new { performanceEvent.TenantId, performanceEvent.StableKey }).IsUnique();
+        builder.HasIndex(performanceEvent => performanceEvent.CorrelationId);
+        builder.HasOne(performanceEvent => performanceEvent.AthleteProfile).WithMany()
+            .HasForeignKey(performanceEvent => performanceEvent.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
+        builder.HasOne(performanceEvent => performanceEvent.ActorUser).WithMany()
+            .HasForeignKey(performanceEvent => performanceEvent.ActorUserId).OnDelete(DeleteBehavior.SetNull);
+    }
+}
+
 public sealed class CoachInvitationConfiguration : IEntityTypeConfiguration<CoachInvitation>
 {
     public void Configure(EntityTypeBuilder<CoachInvitation> builder)
@@ -195,6 +214,7 @@ public sealed class TrainingSetConfiguration : IEntityTypeConfiguration<Training
         builder.Property(set => set.ActualRpe).HasPrecision(3, 1);
         builder.Property(set => set.ActualEstimatedOneRepMaxKg).HasPrecision(6, 2);
         builder.Property(set => set.ActualEffortPercentage).HasPrecision(4, 3);
+        builder.Property(set => set.MeanVelocityMps).HasPrecision(4, 3);
         builder.Property(set => set.InstagramVideoUrl).HasMaxLength(2_048);
         builder.Property(set => set.AthleteNote).HasMaxLength(2_000);
         builder.Property(set => set.CoachFormFlags).HasMaxLength(2_000);

@@ -13,7 +13,10 @@ public sealed record LoggedSetRequest(
     decimal? ActualEstimatedOneRepMaxKg,
     decimal? ActualEffortPercentage,
     string? InstagramVideoUrl,
-    string? AthleteNote);
+    string? AthleteNote,
+    decimal? MeanVelocityMps = null,
+    int? RestSeconds = null,
+    SetOutcomeReason? OutcomeReason = null);
 
 public sealed record SyncCommandRequest(
     Guid CommandId,

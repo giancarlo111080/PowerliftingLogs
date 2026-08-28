@@ -7,11 +7,11 @@ using PowerliftingProgram.Infrastructure.Services;
 
 namespace PowerliftingProgram.Api.Controllers;
 
-public sealed record LiveSetResponse(Guid Id, int SetNumber, int TargetRepetitions, decimal TargetLoadKg, decimal TargetRpe, SetCompletionStatus CompletionStatus, decimal? ActualLoadKg, int? ActualRepetitions, decimal? ActualRpe);
+public sealed record LiveSetResponse(Guid Id, int SetNumber, int TargetRepetitions, decimal TargetLoadKg, decimal TargetRpe, SetCompletionStatus CompletionStatus, decimal? ActualLoadKg, int? ActualRepetitions, decimal? ActualRpe, decimal? MeanVelocityMps, int? RestSeconds, SetOutcomeReason? OutcomeReason, DateTimeOffset? CompletedAt, string? InstagramVideoUrl);
 public sealed record LiveExerciseResponse(Guid Id, int SortOrder, string Name, ExerciseType ExerciseType, TemplatePrescriptionMode PrescriptionMode, decimal PrescriptionValue, string WeightUnit, IReadOnlyList<LiveSetResponse> Sets);
 public sealed record LiveTrainingDayResponse(Guid Id, string Name, string Focus, DateOnly ScheduledFor, IReadOnlyList<LiveExerciseResponse> Exercises);
 public sealed record LiveTrainingWeekResponse(Guid Id, int WeekNumber, DateOnly StartsOn, IReadOnlyList<LiveTrainingDayResponse> Days);
-public sealed record LiveTrainingLogResponse(Guid Id, Guid AthleteProfileId, Guid? ProgramTemplateId, string Name, DateOnly StartsOn, DateOnly EndsOn, IReadOnlyList<LiveTrainingWeekResponse> Weeks);
+public sealed record LiveTrainingLogResponse(Guid Id, Guid AthleteProfileId, Guid? CoachId, Guid? ProgramTemplateId, string Name, string? Phase, string Goal, int TrainingDaysPerWeek, DateOnly StartsOn, DateOnly EndsOn, DateTimeOffset UpdatedAt, IReadOnlyList<LiveTrainingWeekResponse> Weeks);
 
 [Authorize]
 [ApiController]
@@ -57,15 +57,21 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
     }
 
     private IQueryable<TrainingBlock> LiveLogQuery() => database.TrainingBlocks.AsNoTracking()
+        .Include(block => block.ProgramTemplate)
         .Include(block => block.Weeks).ThenInclude(week => week.Days).ThenInclude(day => day.Exercises).ThenInclude(exercise => exercise.Sets);
 
     private static LiveTrainingLogResponse ToResponse(TrainingBlock block) => new(
         block.Id,
         block.AthleteProfileId,
+        block.CoachId,
         block.ProgramTemplateId,
         block.Name,
+        block.ProgramTemplate?.Phase,
+        block.ProgramTemplate?.Goal ?? block.Name,
+        block.ProgramTemplate?.TrainingDaysPerWeek ?? Math.Clamp(block.Weeks.SelectMany(week => week.Days).Count() / Math.Max(block.Weeks.Count, 1), 1, 7),
         block.StartsOn,
         block.EndsOn,
+        block.UpdatedAt,
         block.Weeks.OrderBy(week => week.WeekNumber).Select(week => new LiveTrainingWeekResponse(
             week.Id,
             week.WeekNumber,
@@ -92,5 +98,10 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
                         set.CompletionStatus,
                         set.ActualLoadKg,
                         set.ActualRepetitions,
-                        set.ActualRpe)).ToList())).ToList())).ToList())).ToList());
+                        set.ActualRpe,
+                        set.MeanVelocityMps,
+                        set.RestSeconds,
+                        set.OutcomeReason,
+                        set.CompletedAt,
+                        set.InstagramVideoUrl)).ToList())).ToList())).ToList())).ToList());
 }

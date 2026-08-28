@@ -22,6 +22,7 @@ public sealed class TrainingDbContext(DbContextOptions<TrainingDbContext> option
     public DbSet<ThreadComment> ThreadComments => Set<ThreadComment>();
     public DbSet<SyncCommand> SyncCommands => Set<SyncCommand>();
     public DbSet<AthleteAchievement> AthleteAchievements => Set<AthleteAchievement>();
+    public DbSet<PerformanceEvent> PerformanceEvents => Set<PerformanceEvent>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {

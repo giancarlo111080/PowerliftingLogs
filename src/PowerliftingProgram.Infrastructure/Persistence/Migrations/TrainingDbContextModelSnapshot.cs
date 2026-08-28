@@ -84,6 +84,32 @@ public partial class TrainingDbContextModelSnapshot : ModelSnapshot
             builder.ToTable("CoachInvitations");
         });
 
+        modelBuilder.Entity("PowerliftingProgram.Domain.Entities.PerformanceEvent", builder =>
+        {
+            builder.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+            builder.Property<Guid?>("ActorUserId").HasColumnType("uuid");
+            builder.Property<Guid>("AthleteProfileId").HasColumnType("uuid");
+            builder.Property<Guid?>("CorrelationId").HasColumnType("uuid");
+            builder.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
+            builder.Property<int>("Kind").HasColumnType("integer");
+            builder.Property<DateTimeOffset>("OccurredAtUtc").HasColumnType("timestamp with time zone");
+            builder.Property<string>("PayloadJson").IsRequired().HasColumnType("jsonb");
+            builder.Property<string>("Provenance").IsRequired().HasMaxLength(500).HasColumnType("character varying(500)");
+            builder.Property<byte[]>("RowVersion").IsConcurrencyToken().HasColumnType("bytea");
+            builder.Property<int>("SchemaVersion").HasColumnType("integer");
+            builder.Property<string>("Source").IsRequired().HasMaxLength(80).HasColumnType("character varying(80)");
+            builder.Property<string>("StableKey").HasMaxLength(160).HasColumnType("character varying(160)");
+            builder.Property<Guid>("TenantId").HasColumnType("uuid");
+            builder.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone");
+            builder.HasKey("Id");
+            builder.HasIndex("ActorUserId");
+            builder.HasIndex("AthleteProfileId");
+            builder.HasIndex("CorrelationId");
+            builder.HasIndex("TenantId", "AthleteProfileId", "Kind", "OccurredAtUtc");
+            builder.HasIndex("TenantId", "StableKey").IsUnique();
+            builder.ToTable("PerformanceEvents");
+        });
+
         modelBuilder.Entity("PowerliftingProgram.Domain.Entities.ProgramTemplate", builder =>
         {
             builder.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -236,7 +262,10 @@ public partial class TrainingDbContextModelSnapshot : ModelSnapshot
             builder.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
             builder.Property<string>("InstagramVideoUrl").HasMaxLength(2048).HasColumnType("character varying(2048)");
             builder.Property<int>("Intent").HasColumnType("integer");
+            builder.Property<decimal?>("MeanVelocityMps").HasPrecision(4, 3).HasColumnType("numeric(4,3)");
+            builder.Property<int?>("OutcomeReason").HasColumnType("integer");
             builder.Property<Guid>("PrescribedExerciseId").HasColumnType("uuid");
+            builder.Property<int?>("RestSeconds").HasColumnType("integer");
             builder.Property<byte[]>("RowVersion").IsConcurrencyToken().HasColumnType("bytea");
             builder.Property<int>("SetNumber").HasColumnType("integer");
             builder.Property<decimal>("TargetEstimatedOneRepMaxKg").HasPrecision(6, 2).HasColumnType("numeric(6,2)");
@@ -350,6 +379,21 @@ public partial class TrainingDbContextModelSnapshot : ModelSnapshot
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
             builder.Navigation("Coach");
+        });
+
+        modelBuilder.Entity("PowerliftingProgram.Domain.Entities.PerformanceEvent", builder =>
+        {
+            builder.HasOne("PowerliftingProgram.Domain.Entities.PlatformUser", "ActorUser")
+                .WithMany()
+                .HasForeignKey("ActorUserId")
+                .OnDelete(DeleteBehavior.SetNull);
+            builder.HasOne("PowerliftingProgram.Domain.Entities.AthleteProfile", "AthleteProfile")
+                .WithMany()
+                .HasForeignKey("AthleteProfileId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            builder.Navigation("ActorUser");
+            builder.Navigation("AthleteProfile");
         });
 
         modelBuilder.Entity("PowerliftingProgram.Domain.Entities.ProgramTemplate", builder =>

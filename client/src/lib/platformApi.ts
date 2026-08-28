@@ -28,6 +28,115 @@ export interface CoachInvitationResponse {
   emailSent: boolean;
 }
 
+export type PerformanceEventKind = "recoveryCheckIn" | "techniqueObservation" | "recommendation" | "coachDecision" | "programVersion" | "competitionPlan" | "competitionAttempt" | "competitionResult" | "consentGrant" | "modelPrediction" | "videoAnnotation" | "athleteGroup" | "exerciseLibraryItem" | "exceptionDisposition";
+
+export interface PerformanceEventResponse<TPayload extends object = Record<string, unknown>> {
+  id: string;
+  tenantId: string;
+  athleteProfileId: string;
+  actorUserId: string | null;
+  kind: PerformanceEventKind;
+  occurredAtUtc: string;
+  source: string;
+  schemaVersion: number;
+  provenance: string;
+  payload: TPayload;
+  correlationId: string | null;
+  stableKey: string | null;
+  createdAt: string;
+}
+
+export interface AppendPerformanceEventRequest {
+  kind: PerformanceEventKind;
+  occurredAtUtc: string;
+  source: string;
+  schemaVersion: 1;
+  provenance: string;
+  payload: object;
+  correlationId?: string;
+  stableKey: string;
+}
+
+export type LiveSetCompletionStatus = "pending" | "done" | "skipped";
+export type LiveSetOutcomeReason = "failed" | "interrupted" | "rescheduled" | "painLimited" | "unavailableEquipment" | "other";
+
+export interface LiveTrainingSetResponse {
+  id: string;
+  setNumber: number;
+  targetRepetitions: number;
+  targetLoadKg: number;
+  targetRpe: number;
+  completionStatus: LiveSetCompletionStatus;
+  actualLoadKg: number | null;
+  actualRepetitions: number | null;
+  actualRpe: number | null;
+  meanVelocityMps: number | null;
+  restSeconds: number | null;
+  outcomeReason: LiveSetOutcomeReason | null;
+  completedAt: string | null;
+  instagramVideoUrl: string | null;
+}
+
+export interface LiveTrainingExerciseResponse {
+  id: string;
+  sortOrder: number;
+  name: string;
+  exerciseType: "squat" | "benchPress" | "deadlift" | "overheadPress" | "accessory" | "conditioning";
+  prescriptionMode: "rpe" | "percentageOfOneRepMax" | "exactLoad";
+  prescriptionValue: number;
+  weightUnit: "kg" | "lb";
+  sets: LiveTrainingSetResponse[];
+}
+
+export interface LiveTrainingLogResponse {
+  id: string;
+  athleteProfileId: string;
+  coachId: string | null;
+  programTemplateId: string | null;
+  name: string;
+  phase: string | null;
+  goal: string;
+  trainingDaysPerWeek: number;
+  startsOn: string;
+  endsOn: string;
+  updatedAt: string;
+  weeks: Array<{
+    id: string;
+    weekNumber: number;
+    startsOn: string;
+    days: Array<{
+      id: string;
+      name: string;
+      focus: string;
+      scheduledFor: string;
+      exercises: LiveTrainingExerciseResponse[];
+    }>;
+  }>;
+}
+
+export interface LoggedSetRequest {
+  idempotencyKey: string;
+  athleteProfileId: string;
+  trainingSetId: string;
+  completionStatus: LiveSetCompletionStatus;
+  actualLoadKg: number | null;
+  actualRepetitions: number | null;
+  actualRpe: number | null;
+  actualEstimatedOneRepMaxKg: null;
+  actualEffortPercentage: null;
+  instagramVideoUrl: string | null;
+  athleteNote: string | null;
+  meanVelocityMps: number | null;
+  restSeconds: number | null;
+  outcomeReason: LiveSetOutcomeReason | null;
+}
+
+export interface SyncCommandOutcome {
+  commandId: string;
+  status: "pending" | "processed" | "rejected";
+  rejectionReason: string | null;
+}
+
 export interface CoachAthleteResponse {
   athleteProfileId: string;
   userId: string;
@@ -182,4 +291,69 @@ export function completePasswordReset(token: string, password: string) {
     return staticDemoError("Password reset is unavailable for fixed demo accounts.");
   }
   return request<void>("/api/auth/password-reset/complete", { method: "POST", body: JSON.stringify({ token, password }) });
+}
+
+export function getPerformanceEvents(accessToken: string, athleteProfileId: string) {
+  if (isStaticDemo) {
+    return Promise.resolve([] as PerformanceEventResponse[]);
+  }
+  return request<PerformanceEventResponse[]>(`/api/performance/athletes/${encodeURIComponent(athleteProfileId)}/events?take=500`, {}, accessToken);
+}
+
+export function appendPerformanceEvent(accessToken: string, athleteProfileId: string, event: AppendPerformanceEventRequest) {
+  if (isStaticDemo) {
+    return staticDemoError("Performance synchronization requires the hosted API.");
+  }
+  return request<PerformanceEventResponse>(`/api/performance/athletes/${encodeURIComponent(athleteProfileId)}/events`, { method: "POST", body: JSON.stringify(event) }, accessToken);
+}
+
+export function exportPerformanceEvents(accessToken: string, athleteProfileId: string) {
+  if (isStaticDemo) {
+    return staticDemoError("Performance export requires the hosted API.");
+  }
+  return request<{ athleteProfileId: string; exportedAtUtc: string; schemaVersion: number; events: PerformanceEventResponse[] }>(`/api/performance/athletes/${encodeURIComponent(athleteProfileId)}/export`, {}, accessToken);
+}
+
+export function deletePerformanceEvents(accessToken: string, athleteProfileId: string) {
+  if (isStaticDemo) {
+    return Promise.resolve();
+  }
+  return request<void>(`/api/performance/athletes/${encodeURIComponent(athleteProfileId)}/events`, { method: "DELETE" }, accessToken);
+}
+
+export async function getCurrentLiveTrainingLog(accessToken: string) {
+  if (isStaticDemo) {
+    return null;
+  }
+  try {
+    return await request<LiveTrainingLogResponse>("/api/live-training/current", {}, accessToken);
+  }
+  catch (error) {
+    if (error instanceof PlatformApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function getAthleteLiveTrainingLog(accessToken: string, athleteProfileId: string) {
+  if (isStaticDemo) {
+    return null;
+  }
+  try {
+    return await request<LiveTrainingLogResponse>(`/api/live-training/athletes/${encodeURIComponent(athleteProfileId)}`, {}, accessToken);
+  }
+  catch (error) {
+    if (error instanceof PlatformApiError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function synchronizeLoggedSet(accessToken: string, input: LoggedSetRequest) {
+  if (isStaticDemo) {
+    return staticDemoError("Training synchronization requires the hosted API.");
+  }
+  return request<SyncCommandOutcome>("/api/sync/logged-set", { method: "POST", body: JSON.stringify(input) }, accessToken);
 }

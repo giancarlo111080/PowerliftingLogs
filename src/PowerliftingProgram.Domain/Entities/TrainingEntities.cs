@@ -42,6 +42,16 @@ public enum SetCompletionStatus
     Skipped = 2
 }
 
+public enum SetOutcomeReason
+{
+    Failed = 0,
+    Interrupted = 1,
+    Rescheduled = 2,
+    PainLimited = 3,
+    UnavailableEquipment = 4,
+    Other = 5
+}
+
 public enum SyncCommandStatus
 {
     Pending = 0,
@@ -161,6 +171,9 @@ public sealed class TrainingSet : Entity
     public decimal? ActualRpe { get; set; }
     public decimal? ActualEstimatedOneRepMaxKg { get; set; }
     public decimal? ActualEffortPercentage { get; set; }
+    public decimal? MeanVelocityMps { get; set; }
+    public int? RestSeconds { get; set; }
+    public SetOutcomeReason? OutcomeReason { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
     public string? InstagramVideoUrl { get; set; }
     public string? AthleteNote { get; set; }

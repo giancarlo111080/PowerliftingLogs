@@ -12,8 +12,7 @@ public sealed class LoggedSetValidator : AbstractValidator<LoggedSetRequest>
         RuleFor(request => request.AthleteProfileId).NotEmpty();
         RuleFor(request => request.TrainingSetId).NotEmpty();
         RuleFor(request => request.CompletionStatus)
-            .IsInEnum()
-            .NotEqual(SetCompletionStatus.Pending);
+            .IsInEnum();
 
         When(request => request.CompletionStatus == SetCompletionStatus.Done, () =>
         {
@@ -22,17 +21,36 @@ public sealed class LoggedSetValidator : AbstractValidator<LoggedSetRequest>
                 .InclusiveBetween(0m, 1_000m);
             RuleFor(request => request.ActualRepetitions)
                 .NotNull()
-                .InclusiveBetween(1, 100);
-            RuleFor(request => request.ActualRpe)
-                .NotNull()
-                .InclusiveBetween(1m, 10m);
-            RuleFor(request => request.ActualEstimatedOneRepMaxKg)
-                .NotNull()
-                .InclusiveBetween(1m, 1_200m);
-            RuleFor(request => request.ActualEffortPercentage)
-                .NotNull()
-                .InclusiveBetween(0.50m, 1.00m);
+                .InclusiveBetween(0, 100);
         });
+
+        RuleFor(request => request.ActualRpe).InclusiveBetween(1m, 10m).When(request => request.ActualRpe is not null);
+        RuleFor(request => request.ActualEstimatedOneRepMaxKg).InclusiveBetween(1m, 1_200m).When(request => request.ActualEstimatedOneRepMaxKg is not null);
+        RuleFor(request => request.ActualEffortPercentage).InclusiveBetween(0.10m, 1.00m).When(request => request.ActualEffortPercentage is not null);
+
+        When(request => request.CompletionStatus == SetCompletionStatus.Skipped, () =>
+        {
+            RuleFor(request => request.OutcomeReason).NotNull().IsInEnum();
+        });
+
+        When(request => request.CompletionStatus != SetCompletionStatus.Skipped, () =>
+        {
+            RuleFor(request => request.OutcomeReason).Null();
+        });
+
+        When(request => request.CompletionStatus == SetCompletionStatus.Pending, () =>
+        {
+            RuleFor(request => request.ActualLoadKg).Null();
+            RuleFor(request => request.ActualRepetitions).Null();
+            RuleFor(request => request.ActualRpe).Null();
+            RuleFor(request => request.ActualEstimatedOneRepMaxKg).Null();
+            RuleFor(request => request.ActualEffortPercentage).Null();
+            RuleFor(request => request.MeanVelocityMps).Null();
+            RuleFor(request => request.RestSeconds).Null();
+        });
+
+        RuleFor(request => request.MeanVelocityMps).InclusiveBetween(0.01m, 5m).When(request => request.MeanVelocityMps is not null);
+        RuleFor(request => request.RestSeconds).InclusiveBetween(0, 3_600).When(request => request.RestSeconds is not null);
 
         When(request => request.InstagramVideoUrl is not null, () =>
         {
@@ -62,7 +80,7 @@ public sealed class LoggedSetValidator : AbstractValidator<LoggedSetRequest>
 
 public sealed class SyncCommandValidator : AbstractValidator<SyncCommandRequest>
 {
-    private static readonly string[] AllowedCommandTypes = ["log-set", "skip-set", "attach-instagram-video", "add-comment"];
+    private static readonly string[] AllowedCommandTypes = ["log-set", "skip-set", "reset-set", "attach-instagram-video", "add-comment"];
 
     public SyncCommandValidator()
     {
@@ -70,7 +88,7 @@ public sealed class SyncCommandValidator : AbstractValidator<SyncCommandRequest>
         RuleFor(command => command.AthleteProfileId).NotEmpty();
         RuleFor(command => command.AggregateId).NotEmpty();
         RuleFor(command => command.CommandType).Must(AllowedCommandTypes.Contains)
-            .WithMessage("Command type must be one of: log-set, skip-set, attach-instagram-video, add-comment.");
+            .WithMessage("Command type must be one of: log-set, skip-set, reset-set, attach-instagram-video, add-comment.");
         RuleFor(command => command.PayloadJson).NotEmpty().MaximumLength(20_000);
         RuleFor(command => command.DeviceId).NotEmpty().MaximumLength(128);
         RuleFor(command => command.CreatedAt)

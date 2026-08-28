@@ -3,7 +3,7 @@ import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, Text, TextInp
 import { Activity, CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Pencil, Plus, Send, Trash2, X } from "lucide-react-native";
 
 import { useSession } from "../auth/AuthSessionContext";
-import { type ProgramDay, type ProgramDaySetLog, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
+import { type ProgramDay, type ProgramDaySetLog, type ProgramSetOutcomeReason, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 import { InstagramLinkModal } from "./InstagramLinkModal";
 import { TrainingLogSchedulePanel } from "./TrainingLogSchedulePanel";
@@ -38,6 +38,15 @@ interface AccessoryDraft {
   prescriptionValue: string;
   weightUnit: "kg" | "lb";
 }
+
+const missedWorkReasons: Array<{ value: ProgramSetOutcomeReason; label: string }> = [
+  { value: "failed", label: "Failed" },
+  { value: "interrupted", label: "Interrupted" },
+  { value: "rescheduled", label: "Rescheduled" },
+  { value: "pain-limited", label: "Pain limited" },
+  { value: "unavailable-equipment", label: "Equipment" },
+  { value: "other", label: "Other" }
+];
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }).format(new Date(`${value}T00:00:00.000Z`));
@@ -277,6 +286,7 @@ export function TrainingLogScreen() {
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
   const [actualWeightDrafts, setActualWeightDrafts] = useState<Record<string, string>>({});
+  const [setResultDraft, setSetResultDraft] = useState({ repetitions: "", rpe: "", velocity: "", restSeconds: "", outcomeReason: "" as ProgramSetOutcomeReason | "" });
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [instagramTarget, setInstagramTarget] = useState<InstagramTarget | null>(null);
   const [isVideoAnalysisOpen, setIsVideoAnalysisOpen] = useState(false);
@@ -420,8 +430,17 @@ export function TrainingLogScreen() {
       setMessage(`Enter the weight lifted for set ${setNumber} before marking it done.`);
       return;
     }
+    if (completionStatus === "skipped" && !setResultDraft.outcomeReason) {
+      setMessage(`Choose why set ${setNumber} was not completed.`);
+      return;
+    }
+    const actualRepetitions = setResultDraft.repetitions.trim() ? Number(setResultDraft.repetitions) : exercise.repetitions;
+    const actualRpe = setResultDraft.rpe.trim() ? Number(setResultDraft.rpe) : undefined;
+    const meanVelocityMps = setResultDraft.velocity.trim() ? Number(setResultDraft.velocity) : undefined;
+    const restSeconds = setResultDraft.restSeconds.trim() ? Number(setResultDraft.restSeconds) : undefined;
     try {
-      await logDaySet(selectedProgram.id, selectedEntry.day.id, exercise.id, setNumber, completionStatus, completionStatus === "done" && exercise.prescriptionMode !== "exact" ? actualWeight : undefined, exercise.weightUnit);
+      await logDaySet(selectedProgram.id, selectedEntry.day.id, exercise.id, setNumber, completionStatus, completionStatus === "done" && exercise.prescriptionMode !== "exact" ? actualWeight : undefined, exercise.weightUnit, completionStatus === "pending" ? undefined : { actualRepetitions, actualRpe, meanVelocityMps, restSeconds, outcomeReason: completionStatus === "skipped" ? setResultDraft.outcomeReason || undefined : undefined });
+      if (completionStatus !== "pending") setSetResultDraft({ repetitions: "", rpe: "", velocity: "", restSeconds: "", outcomeReason: "" });
       setMessage(completionStatus === "done" ? `Set ${setNumber} logged.` : completionStatus === "skipped" ? `Set ${setNumber} marked skipped.` : `Set ${setNumber} returned to pending.`);
     }
     catch (reason) {
@@ -467,6 +486,7 @@ export function TrainingLogScreen() {
       <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-6 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
         <View className="flex-col gap-3 border-l-4 border-signal pl-4 sm:flex-row sm:items-end sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{isCoach ? "Athlete training log" : "Your program"}</Text><Text className="mt-2 font-serif text-3xl font-bold text-ink">{isCoach ? `${athlete.displayName}'s workouts` : "Training Log"}</Text><Text className="mt-2 font-serif text-base text-[#52675F]">{isCoach ? "Navigate every workout, review actual loads and footage, then leave feedback in context." : "Every scheduled workout, actual set, video, rating, and coach note lives here."}</Text></View>{selectedProgram ? <View className="flex-row items-center gap-2"><CalendarDays size={18} color="#2E6F5E" /><Text className="font-serif text-sm font-bold text-ink">{scheduledDays.length} workout{scheduledDays.length === 1 ? "" : "s"}</Text></View> : null}</View>
         {selectedEntry && selectedProgram ? <TrainingLogSchedulePanel key={selectedEntry.day.id} programId={selectedProgram.id} weekId={selectedEntry.weekId} weekName={selectedEntry.weekName} day={selectedEntry.day} actorRole={session.role === "COACH" ? "coach" : "lifter"} /> : null}
+        {selectedEntry && !isCoach ? <View className="border border-fog bg-paper p-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Next set result</Text><Text className="mt-1 font-serif text-sm text-muted">These values apply when you mark the next set done or skipped. Reps default to the prescription.</Text><View className="mt-3 flex-row flex-wrap gap-2"><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.repetitions} onChangeText={(repetitions) => setSetResultDraft((draft) => ({ ...draft, repetitions }))} keyboardType="number-pad" placeholder="Actual reps" placeholderTextColor="#8996AC" accessibilityLabel="Actual repetitions" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.rpe} onChangeText={(rpe) => setSetResultDraft((draft) => ({ ...draft, rpe }))} keyboardType="decimal-pad" placeholder="Actual RPE" placeholderTextColor="#8996AC" accessibilityLabel="Actual RPE" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.velocity} onChangeText={(velocity) => setSetResultDraft((draft) => ({ ...draft, velocity }))} keyboardType="decimal-pad" placeholder="Velocity m/s" placeholderTextColor="#8996AC" accessibilityLabel="Mean velocity metres per second" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.restSeconds} onChangeText={(restSeconds) => setSetResultDraft((draft) => ({ ...draft, restSeconds }))} keyboardType="number-pad" placeholder="Rest seconds" placeholderTextColor="#8996AC" accessibilityLabel="Rest time in seconds" /></View><Text className="mt-4 font-serif text-xs font-bold uppercase tracking-widest text-muted">If skipped, choose why</Text><View className="mt-2 flex-row flex-wrap gap-2">{missedWorkReasons.map((reason) => <Pressable key={reason.value} className={`border px-3 py-2 ${setResultDraft.outcomeReason === reason.value ? "border-signal bg-signal" : "border-fog bg-canvas"}`} onPress={() => setSetResultDraft((draft) => ({ ...draft, outcomeReason: draft.outcomeReason === reason.value ? "" : reason.value }))} accessibilityRole="radio" accessibilityState={{ selected: setResultDraft.outcomeReason === reason.value }}><Text className={`font-serif text-xs font-bold ${setResultDraft.outcomeReason === reason.value ? "text-white" : "text-ink"}`}>{reason.label}</Text></Pressable>)}</View></View> : null}
         {selectedEntry && selectedProgram && analysisTargets.length ? <View className="border border-fog bg-paper p-4"><View className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Technique review</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Analyze original lift footage</Text><Text className="mt-1 font-serif text-sm leading-6 text-muted">Browser-local AI pose analysis supports squat, bench, and deadlift sets. Accessories are excluded. The source video is never uploaded or saved.</Text></View><Pressable className="min-h-11 flex-row items-center justify-center gap-2 bg-ink px-4 py-3" onPress={() => setIsVideoAnalysisOpen(true)} accessibilityLabel="Analyze a lift video"><Activity size={17} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Analyze lift</Text></Pressable></View>{savedAnalysisTargets.length ? <View className="mt-4 flex-row flex-wrap gap-2 border-t border-fog pt-4">{savedAnalysisTargets.map((target) => <View key={`${target.exerciseId}-${target.setNumber}`} className="min-w-44 flex-1 border border-fog bg-canvas px-3 py-2"><Text className="font-serif text-xs font-bold text-ink">{target.exerciseName} · Set {target.setNumber}</Text><Text className="mt-1 font-mono text-xs text-muted">{analysisMetric(target.videoAnalysis?.meanConcentricVelocityMps ?? null, " m/s")} · Est. RPE {analysisMetric(target.videoAnalysis?.confidence === "low" ? null : target.videoAnalysis?.estimatedRpe ?? null, "")}</Text></View>)}</View> : null}</View> : null}
         {isCoach && selectedProgram ? <CoachLiveLogControls program={selectedProgram} selectedEntry={selectedEntry} onAddWorkout={openWorkoutCreator} onProgramDeleted={() => { setSelectedProgramId(null); setSelectedDayId(null); setMessage("Live program removed."); }} onWeekDeleted={(weekId) => { if (selectedEntry?.weekId === weekId) setSelectedDayId(null); setMessage("Week removed from the live program."); }} onDayDeleted={(dayId) => { if (selectedEntry?.day.id === dayId) setSelectedDayId(null); setMessage("Workout removed from the live program."); }} /> : null}
         {message ? <View className="border border-moss bg-[#2E6F5E12] px-4 py-3"><Text className="font-serif text-sm text-moss">{message}</Text></View> : null}

@@ -70,6 +70,7 @@ public sealed class WorkoutSyncService(
             {
                 case "log-set":
                 case "skip-set":
+                case "reset-set":
                     await ApplyLoggedSetAsync(command, cancellationToken);
                     break;
                 case "attach-instagram-video":
@@ -138,8 +139,13 @@ public sealed class WorkoutSyncService(
         {
             throw new InvalidOperationException("The logged set identity does not match the sync command.");
         }
-        if ((command.CommandType == "log-set") != (request.CompletionStatus == SetCompletionStatus.Done)
-            || (command.CommandType == "skip-set") != (request.CompletionStatus == SetCompletionStatus.Skipped))
+        var expectedCommandType = request.CompletionStatus switch
+        {
+            SetCompletionStatus.Done => "log-set",
+            SetCompletionStatus.Skipped => "skip-set",
+            _ => "reset-set"
+        };
+        if (command.CommandType != expectedCommandType)
         {
             throw new InvalidOperationException("The logged set status does not match the sync command type.");
         }
@@ -175,13 +181,25 @@ public sealed class WorkoutSyncService(
         trainingSet.ActualLoadKg = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualLoadKg : null;
         trainingSet.ActualRepetitions = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualRepetitions : null;
         trainingSet.ActualRpe = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualRpe : null;
-        trainingSet.ActualEstimatedOneRepMaxKg = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualEstimatedOneRepMaxKg : null;
-        trainingSet.ActualEffortPercentage = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualEffortPercentage : null;
+        var derivedOneRepMax = request.CompletionStatus == SetCompletionStatus.Done && request.ActualRepetitions > 0 && request.ActualLoadKg is decimal loadKg
+            ? Math.Min(1_200m, loadKg * (1m + (request.ActualRepetitions.Value + Math.Max(0m, 10m - (request.ActualRpe ?? 10m))) / 30m))
+            : (decimal?)null;
+        trainingSet.ActualEstimatedOneRepMaxKg = request.CompletionStatus == SetCompletionStatus.Done ? request.ActualEstimatedOneRepMaxKg ?? derivedOneRepMax : null;
+        trainingSet.ActualEffortPercentage = request.CompletionStatus == SetCompletionStatus.Done
+            ? request.ActualEffortPercentage ?? (derivedOneRepMax is > 0m ? Math.Clamp(request.ActualLoadKg!.Value / derivedOneRepMax.Value, 0.10m, 1m) : null)
+            : null;
+        trainingSet.MeanVelocityMps = request.CompletionStatus == SetCompletionStatus.Done ? request.MeanVelocityMps : null;
+        trainingSet.RestSeconds = request.CompletionStatus == SetCompletionStatus.Pending ? null : request.RestSeconds;
+        trainingSet.OutcomeReason = request.CompletionStatus == SetCompletionStatus.Skipped ? request.OutcomeReason : null;
         trainingSet.InstagramVideoUrl = request.InstagramVideoUrl;
         trainingSet.AthleteNote = request.AthleteNote;
         if (request.CompletionStatus == SetCompletionStatus.Done && trainingSet.CompletedAt is null)
         {
             trainingSet.CompletedAt = DateTimeOffset.UtcNow;
+        }
+        else if (request.CompletionStatus == SetCompletionStatus.Pending)
+        {
+            trainingSet.CompletedAt = null;
         }
         trainingSet.UpdatedAt = DateTimeOffset.UtcNow;
 
@@ -191,7 +209,7 @@ public sealed class WorkoutSyncService(
         athlete.CumulativeWorkingSetTonnageKg = Math.Max(0m,
             athlete.CumulativeWorkingSetTonnageKg - previousTonnage + currentTonnage);
 
-        if (request.CompletionStatus == SetCompletionStatus.Done && !wasRewarded)
+        if (request.CompletionStatus == SetCompletionStatus.Done && request.ActualRepetitions > 0 && !wasRewarded)
         {
             var isPersonalRecord = request.ActualEstimatedOneRepMaxKg is > 0m
                 && request.ActualEstimatedOneRepMaxKg > ResolveOneRepMax(athlete, trainingSet.PrescribedExercise.ExerciseType);

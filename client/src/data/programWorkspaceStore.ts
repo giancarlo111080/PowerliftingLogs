@@ -1,8 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useSyncExternalStore } from "react";
 
+import { useSession } from "../auth/AuthSessionContext";
 import { isLiftVideoAnalysis, type LiftVideoAnalysis } from "../lib/liftAnalysis";
-import { isStaticDemo } from "../lib/platformApi";
+import { getAthleteLiveTrainingLog, getCurrentLiveTrainingLog, isStaticDemo, PlatformApiError, synchronizeLoggedSet, type LiveSetOutcomeReason, type LiveTrainingLogResponse, type LoggedSetRequest } from "../lib/platformApi";
 
 export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
 export type ProgramStatus = "draft" | "active" | "completed";
@@ -11,6 +12,7 @@ export type PrescriptionMode = "rpe" | "rir" | "percent" | "exact";
 export type WeightUnit = "kg" | "lb";
 export type DayScheduleAuthor = "coach" | "lifter";
 export type ProgramSetCompletionStatus = "pending" | "done" | "skipped";
+export type ProgramSetOutcomeReason = "failed" | "interrupted" | "rescheduled" | "pain-limited" | "unavailable-equipment" | "other";
 
 export interface ProgramExercise {
   id: string;
@@ -21,6 +23,7 @@ export interface ProgramExercise {
   prescriptionMode: PrescriptionMode;
   prescriptionValue: number;
   weightUnit: WeightUnit;
+  trainingSetIds?: string[];
 }
 
 export interface ProgramDay {
@@ -59,8 +62,21 @@ export interface ProgramDaySetLog {
   completedAt?: string;
   actualWeight?: number;
   weightUnit?: WeightUnit;
+  actualRepetitions?: number;
+  actualRpe?: number;
+  meanVelocityMps?: number;
+  restSeconds?: number;
+  outcomeReason?: ProgramSetOutcomeReason;
   instagramVideoUrl?: string;
   videoAnalysis?: LiftVideoAnalysis;
+}
+
+export interface ProgramSetResultDetails {
+  actualRepetitions?: number;
+  actualRpe?: number;
+  meanVelocityMps?: number;
+  restSeconds?: number;
+  outcomeReason?: ProgramSetOutcomeReason;
 }
 
 export interface ProgramDayLog {
@@ -86,6 +102,7 @@ export interface TrainingProgram {
   status: ProgramStatus;
   updatedAt: string;
   weeks: ProgramWeek[];
+  serverManaged?: boolean;
 }
 
 export type ProgramInput = Omit<TrainingProgram, "id" | "athleteId" | "updatedAt" | "weeks">;
@@ -127,6 +144,7 @@ interface ProgramWorkspaceStore {
   isLoading: boolean;
   createProgram: (athleteId: string, input: ProgramInput) => Promise<void>;
   updateProgram: (programId: string, input: ProgramInput) => Promise<void>;
+  restoreProgramSnapshot: (programId: string, snapshot: TrainingProgram, expectedUpdatedAt: string) => Promise<TrainingProgram>;
   deleteProgram: (programId: string) => Promise<void>;
   createTemplate: (coachId: string, input: ProgramTemplateInput) => Promise<ProgramTemplate>;
   updateTemplate: (templateId: string, input: ProgramTemplateInput) => Promise<void>;
@@ -149,7 +167,7 @@ interface ProgramWorkspaceStore {
   addExercise: (programId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>) => Promise<ProgramExercise>;
   updateExercise: (programId: string, weekId: string, dayId: string, exercise: ProgramExercise) => Promise<void>;
   deleteExercise: (programId: string, weekId: string, dayId: string, exerciseId: string) => Promise<void>;
-  logDaySet: (programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) => Promise<void>;
+  logDaySet: (programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit, details?: ProgramSetResultDetails) => Promise<void>;
   updateDaySetInstagramLink: (programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) => Promise<void>;
   updateDaySetVideoAnalysis: (programId: string, dayId: string, exerciseId: string, setNumber: number, videoAnalysis: LiftVideoAnalysis) => Promise<void>;
   updateDayRating: (programId: string, dayId: string, sessionRating: number | null) => Promise<void>;
@@ -164,10 +182,17 @@ interface ProgramWorkspaceSnapshot {
   isLoading: boolean;
 }
 
+interface TrainingSetOutboxItem {
+  ownerUserId: string;
+  athleteProfileId: string;
+  request: LoggedSetRequest;
+}
+
 const programStorageKey = "iron-forge/coach-programs";
 const templateStorageKey = "iron-forge/program-templates";
 const commentStorageKey = "iron-forge/program-day-comments";
 const dayLogStorageKey = "iron-forge/program-day-logs";
+const trainingSetOutboxStorageKey = "iron-forge/training-set-outbox";
 const legacyProgramStorageKey = "powerlifting-program/coach-programs";
 const legacyCommentStorageKey = "powerlifting-program/program-day-comments";
 const legacyDayLogStorageKey = "powerlifting-program/program-day-logs";
@@ -276,6 +301,9 @@ let isLoading = true;
 let workspaceSnapshot: ProgramWorkspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
 let workspaceRestorePromise: Promise<void> | null = null;
 let workspaceWriteQueue = Promise.resolve();
+let trainingSetOutbox: TrainingSetOutboxItem[] = [];
+let trainingSyncQueue = Promise.resolve();
+const workspaceSyncs = new Map<string, Promise<void>>();
 
 function publishWorkspaceSnapshot() {
   workspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
@@ -321,11 +349,12 @@ async function readMigratedWorkspaceItem(key: string, legacyKey?: string) {
 
 async function restoreWorkspace() {
   try {
-    const [storedPrograms, storedTemplates, storedComments, storedDayLogs] = await Promise.all([
+    const [storedPrograms, storedTemplates, storedComments, storedDayLogs, storedTrainingSetOutbox] = await Promise.all([
       readMigratedWorkspaceItem(programStorageKey, legacyProgramStorageKey),
       readMigratedWorkspaceItem(templateStorageKey),
       readMigratedWorkspaceItem(commentStorageKey, legacyCommentStorageKey),
-      readMigratedWorkspaceItem(dayLogStorageKey, legacyDayLogStorageKey)
+      readMigratedWorkspaceItem(dayLogStorageKey, legacyDayLogStorageKey),
+      readMigratedWorkspaceItem(trainingSetOutboxStorageKey)
     ]);
     const restoredPrograms = restoreItems(storedPrograms, normalizeProgram, fallbackPrograms);
     programs = restoredPrograms.filter((program) => isStaticDemo ? program.id === "program-alex-peak" || !legacyDemoProgramIds.has(program.id) : !legacyDemoProgramIds.has(program.id));
@@ -335,6 +364,7 @@ async function restoreWorkspace() {
     const restoredDayLogs = restoreItems(storedDayLogs, (value) => isDayLog(value) ? value : null, []);
     comments = restoredComments.filter((comment) => retainedProgramIds.has(comment.programId));
     dayLogs = restoredDayLogs.filter((dayLog) => retainedProgramIds.has(dayLog.programId));
+    trainingSetOutbox = restoreItems(storedTrainingSetOutbox, normalizeTrainingSetOutboxItem, []);
     const cleanupWrites: Promise<void>[] = [];
     if (storedPrograms !== null && programs.length !== restoredPrograms.length) cleanupWrites.push(AsyncStorage.setItem(programStorageKey, JSON.stringify(programs)));
     if (storedComments !== null && comments.length !== restoredComments.length) cleanupWrites.push(AsyncStorage.setItem(commentStorageKey, JSON.stringify(comments)));
@@ -346,6 +376,7 @@ async function restoreWorkspace() {
     templates = [];
     comments = [];
     dayLogs = [];
+    trainingSetOutbox = [];
   }
   finally {
     isLoading = false;
@@ -362,6 +393,223 @@ function writeWorkspaceItem(key: string, value: string) {
   const write = workspaceWriteQueue.then(() => AsyncStorage.setItem(key, value));
   workspaceWriteQueue = write.catch(() => undefined);
   return write;
+}
+
+function normalizeTrainingSetOutboxItem(value: unknown): TrainingSetOutboxItem | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<TrainingSetOutboxItem>;
+  const request = candidate.request as Partial<LoggedSetRequest> | undefined;
+  return typeof candidate.ownerUserId === "string" && typeof candidate.athleteProfileId === "string" && request &&
+    typeof request.idempotencyKey === "string" && typeof request.athleteProfileId === "string" && typeof request.trainingSetId === "string" &&
+    (request.completionStatus === "pending" || request.completionStatus === "done" || request.completionStatus === "skipped")
+    ? candidate as TrainingSetOutboxItem
+    : null;
+}
+
+async function persistTrainingSetOutbox(nextOutbox: TrainingSetOutboxItem[]) {
+  trainingSetOutbox = nextOutbox;
+  await writeWorkspaceItem(trainingSetOutboxStorageKey, JSON.stringify(nextOutbox));
+}
+
+async function enqueueTrainingSetResult(item: TrainingSetOutboxItem) {
+  if (trainingSetOutbox.some((candidate) => candidate.request.idempotencyKey === item.request.idempotencyKey)) {
+    return;
+  }
+  await persistTrainingSetOutbox([...trainingSetOutbox, item]);
+}
+
+async function flushTrainingSetOutbox(accessToken: string, ownerUserId: string, athleteProfileId: string) {
+  const run = trainingSyncQueue.then(async () => {
+    const pending = trainingSetOutbox.filter((item) => item.ownerUserId === ownerUserId && item.athleteProfileId === athleteProfileId);
+    for (const item of pending) {
+      try {
+        await synchronizeLoggedSet(accessToken, item.request);
+        await persistTrainingSetOutbox(trainingSetOutbox.filter((candidate) => candidate.request.idempotencyKey !== item.request.idempotencyKey));
+      }
+      catch (error) {
+        if (error instanceof PlatformApiError && error.status >= 400 && error.status < 500 && error.status !== 401) {
+          await persistTrainingSetOutbox(trainingSetOutbox.filter((candidate) => candidate.request.idempotencyKey !== item.request.idempotencyKey));
+          continue;
+        }
+        throw error;
+      }
+    }
+  });
+  trainingSyncQueue = run.catch(() => undefined);
+  return run;
+}
+
+function mapPhase(value: string | null): ProgramPhase {
+  return value === "Hypertrophy" || value === "Strength" || value === "Peak" || value === "Recovery" ? value : "Strength";
+}
+
+function mapExerciseCategory(value: LiveTrainingLogResponse["weeks"][number]["days"][number]["exercises"][number]["exerciseType"]): ExerciseCategory {
+  if (value === "squat") return "squat";
+  if (value === "benchPress") return "bench";
+  if (value === "deadlift") return "deadlift";
+  return "accessory";
+}
+
+function mapPrescriptionMode(value: LiveTrainingLogResponse["weeks"][number]["days"][number]["exercises"][number]["prescriptionMode"]): PrescriptionMode {
+  if (value === "percentageOfOneRepMax") return "percent";
+  if (value === "exactLoad") return "exact";
+  return "rpe";
+}
+
+function mapOutcomeReason(value: LiveSetOutcomeReason | null): ProgramSetOutcomeReason | undefined {
+  if (value === "painLimited") return "pain-limited";
+  if (value === "unavailableEquipment") return "unavailable-equipment";
+  return value ?? undefined;
+}
+
+function toRemoteOutcomeReason(value: ProgramSetOutcomeReason | undefined): LiveSetOutcomeReason | null {
+  if (value === "pain-limited") return "painLimited";
+  if (value === "unavailable-equipment") return "unavailableEquipment";
+  return value ?? null;
+}
+
+function toDisplayWeight(weightKg: number, unit: WeightUnit) {
+  return unit === "lb" ? weightKg / 0.45359237 : weightKg;
+}
+
+function toKilograms(weight: number, unit: WeightUnit) {
+  return unit === "lb" ? weight * 0.45359237 : weight;
+}
+
+function mapRemoteTrainingProgram(remote: LiveTrainingLogResponse): TrainingProgram {
+  return {
+    id: remote.id,
+    athleteId: remote.athleteProfileId,
+    coachId: remote.coachId ?? undefined,
+    templateId: remote.programTemplateId ?? undefined,
+    name: remote.name,
+    phase: mapPhase(remote.phase),
+    goal: remote.goal,
+    startDate: remote.startsOn,
+    endDate: remote.endsOn,
+    trainingDaysPerWeek: remote.trainingDaysPerWeek,
+    status: "active",
+    updatedAt: remote.updatedAt,
+    serverManaged: true,
+    weeks: remote.weeks.map((week) => ({
+      id: week.id,
+      weekNumber: week.weekNumber,
+      name: `Week ${week.weekNumber}`,
+      days: week.days.map((day, dayIndex) => ({
+        id: day.id,
+        sequence: dayIndex + 1,
+        name: day.name,
+        focus: day.focus,
+        scheduledDate: day.scheduledFor,
+        scheduleUpdatedBy: "coach",
+        scheduleUpdatedAt: remote.updatedAt,
+        exercises: day.exercises.map((exercise) => {
+          const orderedSets = [...exercise.sets].sort((left, right) => left.setNumber - right.setNumber);
+          return {
+            id: exercise.id,
+            category: mapExerciseCategory(exercise.exerciseType),
+            name: exercise.name,
+            sets: orderedSets.length,
+            repetitions: orderedSets[0]?.targetRepetitions ?? 1,
+            prescriptionMode: mapPrescriptionMode(exercise.prescriptionMode),
+            prescriptionValue: exercise.prescriptionValue,
+            weightUnit: exercise.weightUnit,
+            trainingSetIds: orderedSets.map((set) => set.id)
+          };
+        })
+      }))
+    }))
+  };
+}
+
+function mapRemoteDayLogs(remote: LiveTrainingLogResponse): ProgramDayLog[] {
+  return remote.weeks.flatMap((week) => week.days).map((day) => {
+    const previousDayLog = dayLogs.find((candidate) => candidate.programId === remote.id && candidate.dayId === day.id);
+    const sets = day.exercises.flatMap((exercise) => exercise.sets.map((set) => {
+      const previousSet = previousDayLog?.sets.find((candidate) => candidate.exerciseId === exercise.id && candidate.setNumber === set.setNumber);
+      const nextSet: ProgramDaySetLog = {
+        exerciseId: exercise.id,
+        setNumber: set.setNumber,
+        completionStatus: set.completionStatus,
+        ...(set.completedAt ? { completedAt: set.completedAt } : {}),
+        ...(set.actualLoadKg !== null ? { actualWeight: toDisplayWeight(set.actualLoadKg, exercise.weightUnit), weightUnit: exercise.weightUnit } : {}),
+        ...(set.actualRepetitions !== null ? { actualRepetitions: set.actualRepetitions } : {}),
+        ...(set.actualRpe !== null ? { actualRpe: set.actualRpe } : {}),
+        ...(set.meanVelocityMps !== null ? { meanVelocityMps: set.meanVelocityMps } : {}),
+        ...(set.restSeconds !== null ? { restSeconds: set.restSeconds } : {}),
+        ...(set.outcomeReason ? { outcomeReason: mapOutcomeReason(set.outcomeReason) } : {}),
+        ...(set.instagramVideoUrl ?? previousSet?.instagramVideoUrl ? { instagramVideoUrl: set.instagramVideoUrl ?? previousSet?.instagramVideoUrl } : {}),
+        ...(previousSet?.videoAnalysis ? { videoAnalysis: previousSet.videoAnalysis } : {})
+      };
+      return nextSet;
+    })).filter((set) => set.completionStatus !== "pending" || Boolean(set.instagramVideoUrl) || Boolean(set.videoAnalysis));
+    const latestSetUpdate = sets.map((set) => set.completedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+    return {
+      programId: remote.id,
+      dayId: day.id,
+      sets,
+      ...(previousDayLog?.sessionRating ? { sessionRating: previousDayLog.sessionRating } : {}),
+      ...(previousDayLog?.ratedAt ? { ratedAt: previousDayLog.ratedAt } : {}),
+      updatedAt: latestSetUpdate ?? remote.updatedAt
+    };
+  }).filter((dayLog) => dayLog.sets.length > 0 || dayLog.sessionRating !== undefined);
+}
+
+async function applyRemoteTrainingLog(remote: LiveTrainingLogResponse) {
+  const previousPrograms = programs;
+  const previousDayLogs = dayLogs;
+  const supersededProgramIds = new Set(programs.filter((program) => program.athleteId === remote.athleteProfileId && program.status === "active").map((program) => program.id));
+  supersededProgramIds.add(remote.id);
+  programs = [...programs.filter((program) => !supersededProgramIds.has(program.id)), mapRemoteTrainingProgram(remote)];
+  dayLogs = [...dayLogs.filter((dayLog) => !supersededProgramIds.has(dayLog.programId)), ...mapRemoteDayLogs(remote)];
+  publishWorkspaceSnapshot();
+  try {
+    await Promise.all([
+      writeWorkspaceItem(programStorageKey, JSON.stringify(programs)),
+      writeWorkspaceItem(dayLogStorageKey, JSON.stringify(dayLogs))
+    ]);
+  }
+  catch (error) {
+    programs = previousPrograms;
+    dayLogs = previousDayLogs;
+    publishWorkspaceSnapshot();
+    throw error;
+  }
+}
+
+function synchronizeTrainingWorkspace(accessToken: string, ownerUserId: string, role: "COACH" | "ATHLETE", athleteProfileId: string) {
+  const syncKey = `${ownerUserId}:${athleteProfileId}`;
+  const existing = workspaceSyncs.get(syncKey);
+  if (existing) {
+    return existing;
+  }
+  const sync = (async () => {
+    await ensureWorkspaceLoaded();
+    await flushTrainingSetOutbox(accessToken, ownerUserId, athleteProfileId);
+    const remote = role === "ATHLETE"
+      ? await getCurrentLiveTrainingLog(accessToken)
+      : await getAthleteLiveTrainingLog(accessToken, athleteProfileId);
+    if (remote) {
+      await applyRemoteTrainingLog(remote);
+    }
+  })();
+  workspaceSyncs.set(syncKey, sync);
+  void sync.finally(() => {
+    if (workspaceSyncs.get(syncKey) === sync) workspaceSyncs.delete(syncKey);
+  }).catch(() => undefined);
+  return sync;
+}
+
+function createUuid() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === "x" ? random : (random & 0x3) | 0x8).toString(16);
+  });
 }
 
 function isProgramStatus(value: unknown): value is ProgramStatus {
@@ -480,11 +728,19 @@ function updateProgramStructure(program: TrainingProgram, weekId: string, change
 }
 
 export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
+  const { session } = useSession();
   const snapshot = useSyncExternalStore(subscribeToWorkspace, getWorkspaceSnapshot, getWorkspaceSnapshot);
 
   useEffect(() => {
     void ensureWorkspaceLoaded();
   }, []);
+
+  useEffect(() => {
+    if (!session || !session.activeAthleteId || isStaticDemo) {
+      return;
+    }
+    void synchronizeTrainingWorkspace(session.accessToken, session.userId, session.role, session.activeAthleteId).catch(() => undefined);
+  }, [session?.accessToken, session?.activeAthleteId, session?.role, session?.userId]);
 
   async function persistPrograms(nextPrograms: TrainingProgram[]) {
     const previousPrograms = programs;
@@ -572,6 +828,22 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       return program;
     });
     await persistPrograms(nextPrograms);
+  }
+
+  async function restoreProgramSnapshot(programId: string, snapshot: TrainingProgram, expectedUpdatedAt: string) {
+    await ensureWorkspaceLoaded();
+    const current = programs.find((program) => program.id === programId);
+    if (!current) throw new Error("The program no longer exists.");
+    if (current.updatedAt !== expectedUpdatedAt) throw new Error("This program changed after you opened it. Review the latest version before restoring.");
+    const restored = JSON.parse(JSON.stringify(snapshot)) as TrainingProgram;
+    const nextProgram: TrainingProgram = { ...restored, id: current.id, athleteId: current.athleteId, coachId: current.coachId, updatedAt: new Date().toISOString() };
+    const nextPrograms = programs.map((program) => {
+      if (program.id === programId) return nextProgram;
+      if (nextProgram.status === "active" && program.athleteId === current.athleteId && program.status === "active") return { ...program, status: "draft" as const };
+      return program;
+    });
+    await persistPrograms(nextPrograms);
+    return nextProgram;
   }
 
   async function deleteProgram(programId: string) {
@@ -808,12 +1080,28 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       : dayLog).filter((dayLog) => dayLog.sets.length));
   }
 
-  async function logDaySet(programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit) {
+  async function logDaySet(programId: string, dayId: string, exerciseId: string, setNumber: number, completionStatus: ProgramSetCompletionStatus, actualWeight?: number, weightUnit?: WeightUnit, details: ProgramSetResultDetails = {}) {
     await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
-    const exercise = programs.find((program) => program.id === programId)?.weeks.flatMap((week) => week.days).find((day) => day.id === dayId)?.exercises.find((candidate) => candidate.id === exerciseId);
+    const program = programs.find((candidate) => candidate.id === programId);
+    const exercise = program?.weeks.flatMap((week) => week.days).find((day) => day.id === dayId)?.exercises.find((candidate) => candidate.id === exerciseId);
     if (completionStatus === "done" && exercise?.prescriptionMode !== "exact" && (!Number.isFinite(actualWeight) || actualWeight === undefined || actualWeight <= 0)) {
       throw new Error("Enter the weight lifted before completing an RPE or RIR set.");
+    }
+    if (completionStatus === "done" && details.actualRepetitions !== undefined && (!Number.isInteger(details.actualRepetitions) || details.actualRepetitions < 0 || details.actualRepetitions > 100)) {
+      throw new Error("Actual repetitions must be a whole number from 0 to 100.");
+    }
+    if (completionStatus === "done" && details.actualRpe !== undefined && (!Number.isFinite(details.actualRpe) || details.actualRpe < 1 || details.actualRpe > 10)) {
+      throw new Error("Actual RPE must be between 1 and 10.");
+    }
+    if (completionStatus === "done" && details.meanVelocityMps !== undefined && (!Number.isFinite(details.meanVelocityMps) || details.meanVelocityMps <= 0 || details.meanVelocityMps > 5)) {
+      throw new Error("Mean velocity must be greater than 0 and no more than 5 m/s.");
+    }
+    if (details.restSeconds !== undefined && (!Number.isInteger(details.restSeconds) || details.restSeconds < 0 || details.restSeconds > 3600)) {
+      throw new Error("Rest time must be a whole number from 0 to 3600 seconds.");
+    }
+    if (completionStatus === "skipped" && !details.outcomeReason) {
+      throw new Error("Choose why this set was not completed.");
     }
     const existingDayLog = dayLogs.find((dayLog) => dayLog.programId === programId && dayLog.dayId === dayId);
     const existingSets = existingDayLog?.sets ?? [];
@@ -826,6 +1114,11 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
         completionStatus,
         completedAt: now,
         ...(completionStatus === "done" ? { actualWeight: exercise?.prescriptionMode === "exact" ? exercise.prescriptionValue : actualWeight, weightUnit: exercise?.weightUnit ?? weightUnit } : {}),
+        ...(completionStatus === "done" && details.actualRepetitions !== undefined ? { actualRepetitions: details.actualRepetitions } : {}),
+        ...(completionStatus === "done" && details.actualRpe !== undefined ? { actualRpe: details.actualRpe } : {}),
+        ...(completionStatus === "done" && details.meanVelocityMps !== undefined ? { meanVelocityMps: details.meanVelocityMps } : {}),
+        ...(details.restSeconds !== undefined ? { restSeconds: details.restSeconds } : {}),
+        ...(completionStatus === "skipped" && details.outcomeReason ? { outcomeReason: details.outcomeReason } : {}),
         ...(previousSet?.instagramVideoUrl ? { instagramVideoUrl: previousSet.instagramVideoUrl } : {}),
         ...(previousSet?.videoAnalysis ? { videoAnalysis: previousSet.videoAnalysis } : {})
       };
@@ -838,6 +1131,30 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       ? [...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]
       : otherDayLogs;
     await persistDayLogs(nextDayLogs);
+
+    const trainingSetId = exercise?.trainingSetIds?.[setNumber - 1];
+    if (!session || isStaticDemo || !program || !exercise || !trainingSetId || session.activeAthleteId !== program.athleteId) {
+      return;
+    }
+    const loggedWeight = completionStatus === "done" ? nextSet.actualWeight : undefined;
+    const request: LoggedSetRequest = {
+      idempotencyKey: createUuid(),
+      athleteProfileId: program.athleteId,
+      trainingSetId,
+      completionStatus,
+      actualLoadKg: loggedWeight === undefined ? null : toKilograms(loggedWeight, nextSet.weightUnit ?? exercise.weightUnit),
+      actualRepetitions: completionStatus === "done" ? nextSet.actualRepetitions ?? exercise.repetitions : null,
+      actualRpe: completionStatus === "done" ? nextSet.actualRpe ?? null : null,
+      actualEstimatedOneRepMaxKg: null,
+      actualEffortPercentage: null,
+      instagramVideoUrl: nextSet.instagramVideoUrl ?? null,
+      athleteNote: null,
+      meanVelocityMps: completionStatus === "done" ? nextSet.meanVelocityMps ?? null : null,
+      restSeconds: completionStatus === "pending" ? null : nextSet.restSeconds ?? null,
+      outcomeReason: completionStatus === "skipped" ? toRemoteOutcomeReason(nextSet.outcomeReason) : null
+    };
+    await enqueueTrainingSetResult({ ownerUserId: session.userId, athleteProfileId: program.athleteId, request });
+    void flushTrainingSetOutbox(session.accessToken, session.userId, program.athleteId).catch(() => undefined);
   }
 
   async function updateDaySetInstagramLink(programId: string, dayId: string, exerciseId: string, setNumber: number, instagramVideoUrl: string) {
@@ -848,7 +1165,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
     const nextSets = [
       ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
-      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl, videoAnalysis: previousSet?.videoAnalysis }
+      { ...previousSet, exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", instagramVideoUrl }
     ];
     const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
     await persistDayLogs([...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]);
@@ -862,7 +1179,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     const previousSet = existingSets.find((set) => set.exerciseId === exerciseId && set.setNumber === setNumber);
     const nextSets = [
       ...existingSets.filter((set) => set.exerciseId !== exerciseId || set.setNumber !== setNumber),
-      { exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", completedAt: previousSet?.completedAt, actualWeight: previousSet?.actualWeight, weightUnit: previousSet?.weightUnit, instagramVideoUrl: previousSet?.instagramVideoUrl, videoAnalysis }
+      { ...previousSet, exerciseId, setNumber, completionStatus: previousSet?.completionStatus ?? "pending", videoAnalysis }
     ];
     const otherDayLogs = dayLogs.filter((dayLog) => dayLog.programId !== programId || dayLog.dayId !== dayId);
     await persistDayLogs([...otherDayLogs, { programId, dayId, sets: nextSets, sessionRating: existingDayLog?.sessionRating, ratedAt: existingDayLog?.ratedAt, updatedAt: now }]);
@@ -899,6 +1216,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     isLoading: snapshot.isLoading,
     createProgram,
     updateProgram,
+    restoreProgramSnapshot,
     deleteProgram,
     createTemplate,
     updateTemplate,

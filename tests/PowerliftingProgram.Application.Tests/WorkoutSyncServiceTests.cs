@@ -38,6 +38,41 @@ public sealed class WorkoutSyncServiceTests
         Assert.Equal(SyncCommandStatus.Processed, Assert.Single(secondOutcome).Status);
         Assert.Equal(20, athlete.ExperiencePoints);
         Assert.Equal(600m, athlete.CumulativeWorkingSetTonnageKg);
+        Assert.Equal(0.42m, trainingSet.MeanVelocityMps);
+        Assert.Equal(180, trainingSet.RestSeconds);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_WhenSetIsSkipped_PersistsOutcomeReason()
+    {
+        await using var database = CreateDatabase();
+        var athlete = CreateAthlete("skipped-set-athlete");
+        var trainingSet = AddTrainingSet(database, athlete);
+        await database.SaveChangesAsync();
+        var commandId = Guid.NewGuid();
+        var request = new LoggedSetRequest(
+            commandId,
+            athlete.Id,
+            trainingSet.Id,
+            SetCompletionStatus.Skipped,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            120,
+            SetOutcomeReason.PainLimited);
+        var command = new SyncCommandRequest(commandId, athlete.Id, trainingSet.Id, "skip-set", JsonSerializer.Serialize(request, JsonOptions), "test-device", DateTimeOffset.UtcNow);
+
+        var outcomes = await CreateService(database).ProcessAsync([command], new SyncActor(Guid.NewGuid(), "Test Athlete", false), CancellationToken.None);
+
+        Assert.Equal(SyncCommandStatus.Processed, Assert.Single(outcomes).Status);
+        Assert.Equal(SetCompletionStatus.Skipped, trainingSet.CompletionStatus);
+        Assert.Equal(SetOutcomeReason.PainLimited, trainingSet.OutcomeReason);
+        Assert.Equal(120, trainingSet.RestSeconds);
     }
 
     [Fact]
@@ -161,7 +196,9 @@ public sealed class WorkoutSyncServiceTests
             loadKg * 1.15m,
             0.9m,
             null,
-            null);
+            null,
+            0.42m,
+            180);
         return new SyncCommandRequest(
             commandId,
             athleteProfileId,

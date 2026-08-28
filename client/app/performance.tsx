@@ -1,5 +1,5 @@
-import { PerformanceHubScreen } from "../src/components/PerformanceHubScreen";
+import { AthletePerformanceScreen } from "../src/components/AthletePerformanceScreen";
 
 export default function PerformanceRoute() {
-  return <PerformanceHubScreen />;
+  return <AthletePerformanceScreen />;
 }
