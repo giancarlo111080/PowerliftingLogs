@@ -240,7 +240,7 @@ public sealed class ProgramTemplatesController(
             return day is null ? NotFound() : Forbid();
         }
         if (string.IsNullOrWhiteSpace(update.Name) || update.Name.Trim().Length > 160
-            || string.IsNullOrWhiteSpace(update.Focus) || update.Focus.Trim().Length > 160
+            || (update.Focus?.Trim().Length ?? 0) > 160
             || update.Exercises.Count is 0 or > MaxExercisesPerDay
             || update.Exercises.Select(exercise => exercise.ExerciseId).Distinct().Count() != update.Exercises.Count)
         {
@@ -249,7 +249,7 @@ public sealed class ProgramTemplatesController(
 
         var updatedAt = DateTimeOffset.UtcNow;
         day.Name = update.Name.Trim();
-        day.Focus = update.Focus.Trim();
+        day.Focus = update.Focus?.Trim() ?? string.Empty;
         day.ScheduledFor = update.ScheduledFor;
         day.UpdatedAt = updatedAt;
         day.TrainingWeek.TrainingBlock.UpdatedAt = updatedAt;
@@ -347,7 +347,7 @@ public sealed class ProgramTemplatesController(
             var week = new ProgramTemplateWeek { WeekNumber = inputWeek.WeekNumber, Name = inputWeek.Name.Trim() };
             foreach (var inputDay in inputWeek.Days.OrderBy(day => day.DayNumber))
             {
-                var day = new ProgramTemplateDay { DayNumber = inputDay.DayNumber, Name = inputDay.Name.Trim(), Focus = inputDay.Focus.Trim() };
+                var day = new ProgramTemplateDay { DayNumber = inputDay.DayNumber, Name = inputDay.Name.Trim(), Focus = inputDay.Focus?.Trim() ?? string.Empty };
                 foreach (var inputExercise in inputDay.Exercises.OrderBy(exercise => exercise.SortOrder))
                 {
                     day.Exercises.Add(new ProgramTemplateExercise

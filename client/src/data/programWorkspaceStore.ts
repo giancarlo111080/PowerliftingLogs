@@ -1118,7 +1118,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     }
     const nextDay = createDay(
       day.name.trim() || `Day ${targetWeek.days.length + 1}`,
-      day.focus.trim() || "Training day",
+      day.focus.trim(),
       [],
       isIsoDate(day.scheduledDate) ? day.scheduledDate : addCalendarDays(program.startDate, ((targetWeek.weekNumber - 1) * 7) + targetWeek.days.length),
       Math.max(0, ...targetWeek.days.map((currentDay) => currentDay.sequence)) + 1
@@ -1133,7 +1133,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   async function updateDay(programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) {
     await ensureWorkspaceLoaded();
     const nextPrograms = programs.map((program) => program.id === programId
-      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus, ...(isIsoDate(day.scheduledDate) ? { scheduledDate: day.scheduledDate, scheduleUpdatedBy: "coach" as const, scheduleUpdatedAt: new Date().toISOString() } : {}) } : currentDay) }))
+      ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim(), ...(isIsoDate(day.scheduledDate) ? { scheduledDate: day.scheduledDate, scheduleUpdatedBy: "coach" as const, scheduleUpdatedAt: new Date().toISOString() } : {}) } : currentDay) }))
       : program);
     await persistPrograms(nextPrograms);
   }

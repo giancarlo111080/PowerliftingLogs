@@ -208,8 +208,8 @@ function CoachLiveLogControls({ program, selectedEntry, onAddWorkout, onProgramD
   }
 
   async function saveDay() {
-    if (!selectedEntry || !dayDraft.name.trim() || !dayDraft.focus.trim() || !isIsoDate(dayDraft.scheduledDate)) {
-      setFeedback("Enter a workout name, focus, and date as YYYY-MM-DD.");
+    if (!selectedEntry || !dayDraft.name.trim() || !isIsoDate(dayDraft.scheduledDate)) {
+      setFeedback("Enter a workout name and date as YYYY-MM-DD.");
       return;
     }
     await updateDay(program.id, selectedEntry.weekId, selectedEntry.day.id, dayDraft);
@@ -388,8 +388,8 @@ export function TrainingLogScreen() {
       setIsAddingWorkout(false);
       return;
     }
-    if (!workoutDraft.name.trim() || !workoutDraft.focus.trim() || !isIsoDate(workoutDraft.scheduledDate)) {
-      setMessage("Enter a workout name, focus, and date as YYYY-MM-DD.");
+    if (!workoutDraft.name.trim() || !isIsoDate(workoutDraft.scheduledDate)) {
+      setMessage("Enter a workout name and date as YYYY-MM-DD.");
       return;
     }
     try {

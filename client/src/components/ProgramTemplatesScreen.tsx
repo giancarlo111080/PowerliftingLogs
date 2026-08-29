@@ -218,8 +218,8 @@ export function ProgramTemplatesScreen() {
       setMessage("A training week can contain no more than 7 days.");
       return;
     }
-    if (!dayDraft.name.trim() || !dayDraft.focus.trim()) {
-      setMessage("Add a day name and its training focus.");
+    if (!dayDraft.name.trim()) {
+      setMessage("Add a day name.");
       return;
     }
     try {
@@ -611,7 +611,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                               />
                               <TextInput 
                                 className="flex-1 min-h-10 border border-fog bg-paper px-2 py-1 text-xs text-ink rounded" 
-                                placeholder="Focus (e.g., Heavy Compound)" 
+                                placeholder="Focus (optional)" 
                                 placeholderTextColor="#71717A"
                                 value={dayDraft.focus} 
                                 onChangeText={(focus) => setDayDrafts((curr) => ({ ...curr, [week.id]: { ...dayDraft, focus } }))} 
