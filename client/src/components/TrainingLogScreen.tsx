@@ -3,8 +3,9 @@ import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, Text, TextInp
 import { Activity, CalendarDays, Check, ChevronLeft, ChevronRight, Circle, ExternalLink, Instagram, Link2, MessageCircle, Minus, Pencil, Plus, Send, Trash2, X } from "lucide-react-native";
 
 import { useSession } from "../auth/AuthSessionContext";
-import { type ProgramDay, type ProgramDaySetLog, type ProgramSetOutcomeReason, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
+import { type ExerciseCategory, type ProgramDay, type ProgramDaySetLog, type ProgramExercise, type ProgramSetOutcomeReason, type TrainingProgram, useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
+import { AccessoryExercisePicker } from "./AccessoryExercisePicker";
 import { InstagramLinkModal } from "./InstagramLinkModal";
 import { TrainingLogSchedulePanel } from "./TrainingLogSchedulePanel";
 import { VideoAnalysisModal } from "./VideoAnalysisModal";
@@ -37,6 +38,15 @@ interface AccessoryDraft {
   prescriptionMode: "rpe" | "rir" | "exact";
   prescriptionValue: string;
   weightUnit: "kg" | "lb";
+}
+
+interface ExerciseDraft {
+  name: string;
+  sets: string;
+  repetitions: string;
+  prescriptionMode: ProgramExercise["prescriptionMode"];
+  prescriptionValue: string;
+  weightUnit: ProgramExercise["weightUnit"];
 }
 
 const missedWorkReasons: Array<{ value: ProgramSetOutcomeReason; label: string }> = [
@@ -245,7 +255,7 @@ function CoachLiveLogControls({ program, selectedEntry, onAddWorkout, onProgramD
             <Plus size={16} color="#F5F7FB" />
             <Text className="font-serif text-sm font-bold text-ink">Week</Text>
           </Pressable>
-          <Pressable className="min-h-10 flex-row items-center gap-2 border border-fog bg-canvas px-3 py-2 disabled:opacity-40" onPress={() => selectedWeek && onAddWorkout(selectedWeek.id)} disabled={!selectedWeek} accessibilityLabel="Add workout to selected week">
+          <Pressable className="min-h-10 flex-row items-center gap-2 border border-fog bg-canvas px-3 py-2 disabled:opacity-40" onPress={() => selectedWeek && onAddWorkout(selectedWeek.id)} disabled={!selectedWeek || selectedWeek.days.length >= 7} accessibilityLabel={selectedWeek?.days.length === 7 ? "Maximum 7 workouts reached for selected week" : "Add workout to selected week"}>
             <Plus size={16} color="#F5F7FB" />
             <Text className="font-serif text-sm font-bold text-ink">Workout</Text>
           </Pressable>
@@ -282,7 +292,7 @@ function CoachLiveLogControls({ program, selectedEntry, onAddWorkout, onProgramD
 
 export function TrainingLogScreen() {
   const { session, currentProfile, activeAthlete } = useSession();
-  const { programs, comments, dayLogs, isLoading, addDay, addExercise, logDaySet, updateDaySetInstagramLink, updateDaySetVideoAnalysis, updateDayRating, addComment } = useProgramWorkspaceStore();
+  const { programs, comments, dayLogs, isLoading, addDay, addExercise, updateExercise, deleteExercise, logDaySet, updateDaySetInstagramLink, updateDaySetVideoAnalysis, updateDayRating, addComment } = useProgramWorkspaceStore();
   const [selectedProgramId, setSelectedProgramId] = useState<string | null>(null);
   const [selectedDayId, setSelectedDayId] = useState<string | null>(null);
   const [actualWeightDrafts, setActualWeightDrafts] = useState<Record<string, string>>({});
@@ -295,10 +305,15 @@ export function TrainingLogScreen() {
   const [workoutDraft, setWorkoutDraft] = useState<WorkoutDraft>({ name: "", focus: "", scheduledDate: "" });
   const [workoutWeekId, setWorkoutWeekId] = useState<string | null>(null);
   const [isAddingAccessory, setIsAddingAccessory] = useState(false);
+  const [isChoosingAccessory, setIsChoosingAccessory] = useState(false);
   const [accessoryDraft, setAccessoryDraft] = useState<AccessoryDraft>({ name: "", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg" });
+  const [editingExercise, setEditingExercise] = useState<ProgramExercise | null>(null);
+  const [exerciseDraft, setExerciseDraft] = useState<ExerciseDraft | null>(null);
+  const [exercisePendingRemoval, setExercisePendingRemoval] = useState<ProgramExercise | null>(null);
 
   const isCoach = session?.role === "COACH";
   const athlete = isCoach ? activeAthlete : currentProfile;
+  const isAthletesCoach = Boolean(isCoach && activeAthlete?.coachId === currentProfile?.userId);
   const athletePrograms = programs.filter((program) => program.athleteId === athlete?.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const selectedProgram = athletePrograms.find((program) => program.id === selectedProgramId) ?? athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
   const scheduledDays: ScheduledDay[] = selectedProgram
@@ -346,6 +361,12 @@ export function TrainingLogScreen() {
       setMessage("Add a week before adding a workout.");
       return;
     }
+    const targetWeek = selectedProgram.weeks.find((week) => week.id === targetWeekId);
+    if (targetWeek && targetWeek.days.length >= 7) {
+      setMessage("A training week can contain no more than 7 days.");
+      setIsAddingWorkout(false);
+      return;
+    }
     setWorkoutDraft({ name: "", focus: "", scheduledDate: selectedEntry?.day.scheduledDate ?? selectedProgram.startDate });
     setWorkoutWeekId(targetWeekId);
     setIsAddingWorkout(true);
@@ -359,6 +380,12 @@ export function TrainingLogScreen() {
     const weekId = workoutWeekId ?? selectedEntry?.weekId ?? selectedProgram.weeks[0]?.id;
     if (!weekId) {
       setMessage("Add a week in Programs before adding a workout.");
+      return;
+    }
+    const targetWeek = selectedProgram.weeks.find((week) => week.id === weekId);
+    if (targetWeek && targetWeek.days.length >= 7) {
+      setMessage("A training week can contain no more than 7 days.");
+      setIsAddingWorkout(false);
       return;
     }
     if (!workoutDraft.name.trim() || !workoutDraft.focus.trim() || !isIsoDate(workoutDraft.scheduledDate)) {
@@ -383,8 +410,55 @@ export function TrainingLogScreen() {
       return;
     }
     setAccessoryDraft({ name: "", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg" });
-    setIsAddingAccessory(true);
+    setIsChoosingAccessory(true);
+    setIsAddingAccessory(false);
     setIsAddingWorkout(false);
+  }
+
+  async function addPrimaryLift(category: Exclude<ExerciseCategory, "accessory">) {
+    if (!isAthletesCoach || !selectedProgram || !selectedEntry) return;
+    try {
+      const exercise = await addExercise(selectedProgram.id, selectedEntry.weekId, selectedEntry.day.id, category);
+      setMessage(`${exercise.name} added to ${selectedEntry.day.name}.`);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : `Could not add ${category}.`);
+    }
+  }
+
+  function beginExerciseEditing(exercise: ProgramExercise) {
+    setEditingExercise(exercise);
+    setExerciseDraft({ name: exercise.name, sets: exercise.sets.toString(), repetitions: exercise.repetitions.toString(), prescriptionMode: exercise.prescriptionMode, prescriptionValue: exercise.prescriptionValue.toString(), weightUnit: exercise.weightUnit });
+  }
+
+  async function saveExercise() {
+    if (!isAthletesCoach || !selectedProgram || !selectedEntry || !editingExercise || !exerciseDraft) return;
+    const sets = Number(exerciseDraft.sets);
+    const repetitions = Number(exerciseDraft.repetitions);
+    const prescriptionValue = Number(exerciseDraft.prescriptionValue);
+    if (!exerciseDraft.name.trim() || !Number.isInteger(sets) || sets < 1 || !Number.isInteger(repetitions) || repetitions < 1 || !Number.isFinite(prescriptionValue) || prescriptionValue < 0) {
+      setMessage("Enter an exercise name, positive whole-number sets and reps, and a valid prescription target.");
+      return;
+    }
+    try {
+      await updateExercise(selectedProgram.id, selectedEntry.weekId, selectedEntry.day.id, { ...editingExercise, name: exerciseDraft.name.trim(), sets, repetitions, prescriptionMode: exerciseDraft.prescriptionMode, prescriptionValue, weightUnit: exerciseDraft.weightUnit });
+      setEditingExercise(null);
+      setExerciseDraft(null);
+      setMessage("Exercise updated.");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not update this exercise.");
+    }
+  }
+
+  async function confirmExerciseRemoval() {
+    if (!isAthletesCoach || !selectedProgram || !selectedEntry || !exercisePendingRemoval) return;
+    try {
+      await deleteExercise(selectedProgram.id, selectedEntry.weekId, selectedEntry.day.id, exercisePendingRemoval.id);
+      setMessage(`${exercisePendingRemoval.name} removed.`);
+      setExercisePendingRemoval(null);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not remove this exercise.");
+      setExercisePendingRemoval(null);
+    }
   }
 
   async function saveAccessory() {
@@ -488,18 +562,61 @@ export function TrainingLogScreen() {
         {selectedEntry && selectedProgram ? <TrainingLogSchedulePanel key={selectedEntry.day.id} programId={selectedProgram.id} weekId={selectedEntry.weekId} weekName={selectedEntry.weekName} day={selectedEntry.day} actorRole={session.role === "COACH" ? "coach" : "lifter"} /> : null}
         {selectedEntry && !isCoach ? <View className="border border-fog bg-paper p-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Next set result</Text><Text className="mt-1 font-serif text-sm text-muted">These values apply when you mark the next set done or skipped. Reps default to the prescription.</Text><View className="mt-3 flex-row flex-wrap gap-2"><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.repetitions} onChangeText={(repetitions) => setSetResultDraft((draft) => ({ ...draft, repetitions }))} keyboardType="number-pad" placeholder="Actual reps" placeholderTextColor="#8996AC" accessibilityLabel="Actual repetitions" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.rpe} onChangeText={(rpe) => setSetResultDraft((draft) => ({ ...draft, rpe }))} keyboardType="decimal-pad" placeholder="Actual RPE" placeholderTextColor="#8996AC" accessibilityLabel="Actual RPE" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.velocity} onChangeText={(velocity) => setSetResultDraft((draft) => ({ ...draft, velocity }))} keyboardType="decimal-pad" placeholder="Velocity m/s" placeholderTextColor="#8996AC" accessibilityLabel="Mean velocity metres per second" /><TextInput className="min-h-10 min-w-28 flex-1 border border-fog bg-canvas px-3 font-serif text-ink" value={setResultDraft.restSeconds} onChangeText={(restSeconds) => setSetResultDraft((draft) => ({ ...draft, restSeconds }))} keyboardType="number-pad" placeholder="Rest seconds" placeholderTextColor="#8996AC" accessibilityLabel="Rest time in seconds" /></View><Text className="mt-4 font-serif text-xs font-bold uppercase tracking-widest text-muted">If skipped, choose why</Text><View className="mt-2 flex-row flex-wrap gap-2">{missedWorkReasons.map((reason) => <Pressable key={reason.value} className={`border px-3 py-2 ${setResultDraft.outcomeReason === reason.value ? "border-signal bg-signal" : "border-fog bg-canvas"}`} onPress={() => setSetResultDraft((draft) => ({ ...draft, outcomeReason: draft.outcomeReason === reason.value ? "" : reason.value }))} accessibilityRole="radio" accessibilityState={{ selected: setResultDraft.outcomeReason === reason.value }}><Text className={`font-serif text-xs font-bold ${setResultDraft.outcomeReason === reason.value ? "text-white" : "text-ink"}`}>{reason.label}</Text></Pressable>)}</View></View> : null}
         {selectedEntry && selectedProgram && analysisTargets.length ? <View className="border border-fog bg-paper p-4"><View className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Technique review</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Analyze original lift footage</Text><Text className="mt-1 font-serif text-sm leading-6 text-muted">Browser-local AI pose analysis supports squat, bench, and deadlift sets. Accessories are excluded. The source video is never uploaded or saved.</Text></View><Pressable className="min-h-11 flex-row items-center justify-center gap-2 bg-ink px-4 py-3" onPress={() => setIsVideoAnalysisOpen(true)} accessibilityLabel="Analyze a lift video"><Activity size={17} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Analyze lift</Text></Pressable></View>{savedAnalysisTargets.length ? <View className="mt-4 flex-row flex-wrap gap-2 border-t border-fog pt-4">{savedAnalysisTargets.map((target) => <View key={`${target.exerciseId}-${target.setNumber}`} className="min-w-44 flex-1 border border-fog bg-canvas px-3 py-2"><Text className="font-serif text-xs font-bold text-ink">{target.exerciseName} · Set {target.setNumber}</Text><Text className="mt-1 font-mono text-xs text-muted">{analysisMetric(target.videoAnalysis?.meanConcentricVelocityMps ?? null, " m/s")} · Est. RPE {analysisMetric(target.videoAnalysis?.confidence === "low" ? null : target.videoAnalysis?.estimatedRpe ?? null, "")}</Text></View>)}</View> : null}</View> : null}
-        {isCoach && selectedProgram ? <CoachLiveLogControls program={selectedProgram} selectedEntry={selectedEntry} onAddWorkout={openWorkoutCreator} onProgramDeleted={() => { setSelectedProgramId(null); setSelectedDayId(null); setMessage("Live program removed."); }} onWeekDeleted={(weekId) => { if (selectedEntry?.weekId === weekId) setSelectedDayId(null); setMessage("Week removed from the live program."); }} onDayDeleted={(dayId) => { if (selectedEntry?.day.id === dayId) setSelectedDayId(null); setMessage("Workout removed from the live program."); }} /> : null}
+        {isAthletesCoach && selectedProgram ? <CoachLiveLogControls program={selectedProgram} selectedEntry={selectedEntry} onAddWorkout={openWorkoutCreator} onProgramDeleted={() => { setSelectedProgramId(null); setSelectedDayId(null); setMessage("Live program removed."); }} onWeekDeleted={(weekId) => { if (selectedEntry?.weekId === weekId) setSelectedDayId(null); setMessage("Week removed from the live program."); }} onDayDeleted={(dayId) => { if (selectedEntry?.day.id === dayId) setSelectedDayId(null); setMessage("Workout removed from the live program."); }} /> : null}
         {message ? <View className="border border-moss bg-[#2E6F5E12] px-4 py-3"><Text className="font-serif text-sm text-moss">{message}</Text></View> : null}
         {isLoading ? <View className="items-center border border-fog bg-paper py-12"><ActivityIndicator color="#2E6F5E" /><Text className="mt-3 font-serif text-sm text-[#52675F]">Loading training logs</Text></View> : null}
 
-        {!isLoading && athletePrograms.length ? <><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Program</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="mt-2 gap-2">{athletePrograms.map((program) => <Pressable key={program.id} className={`w-56 border p-3 ${selectedProgram?.id === program.id ? "border-ink bg-ink" : "border-fog bg-paper"}`} onPress={() => selectProgram(program)}><Text className={`font-serif text-sm font-bold ${selectedProgram?.id === program.id ? "text-white" : "text-ink"}`}>{program.name}</Text><Text className={`mt-1 font-serif text-xs ${selectedProgram?.id === program.id ? "text-[#FFFFFFCC]" : "text-[#52675F]"}`}>{program.phase} · {program.status}</Text></Pressable>)}</ScrollView></View>
+        {!isLoading && athletePrograms.length ? <><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Program</Text>
+        
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="mt-2 gap-2">
+  {athletePrograms.map((program) => (
+    <Pressable 
+      key={program.id} 
+      className={`w-64 border p-3 flex-row justify-between items-center ${selectedProgram?.id === program.id ? "border-ink bg-ink" : "border-fog bg-paper"}`} 
+      onPress={() => selectProgram(program)}
+    >
+      <View className="flex-1 pr-2">
+        <Text className={`font-serif text-sm font-bold ${selectedProgram?.id === program.id ? "text-white" : "text-ink"}`}>{program.name}</Text>
+        <Text className={`mt-1 font-serif text-xs ${selectedProgram?.id === program.id ? "text-[#FFFFFFCC]" : "text-[#52675F]"}`}>{program.phase} · {program.status}</Text>
+      </View>
+      
+      {/* Action buttons visible ONLY to the Coach of the athlete */}
+      {isAthletesCoach && (
+        <View className="flex-row gap-1">
+          <Pressable 
+            className="p-1.5 rounded border border-fog bg-canvas/20 active:opacity-70"
+            onPress={(e) => {
+              e.stopPropagation(); // Avoid triggering selectProgram
+              // Opens programmatic editor mode from controls
+              setSelectedProgramId(program.id);
+            }}
+          >
+            <Pencil size={12} color={selectedProgram?.id === program.id ? "#FFFFFF" : "#17212B"} />
+          </Pressable>
+          <Pressable 
+            className="p-1.5 rounded border border-red-900 bg-red-950/20 active:opacity-70"
+            onPress={(e) => {
+              e.stopPropagation(); // Avoid triggering selectProgram
+              setSelectedProgramId(program.id);
+              // Leverages the built-in modal confirmation inside CoachLiveLogControls
+              setMessage("Use the standard Coach Log Controls panel below to securely execute program deletions.");
+            }}
+          >
+            <Trash2 size={12} color="#FF3B45" />
+          </Pressable>
+        </View>
+      )}
+    </Pressable>
+  ))}
+</ScrollView>
+</View>
           {!selectedEntry && selectedProgram && isCoach ? <View className="border border-fog bg-paper p-4"><View className="flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Build this log</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add the first workout</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">Create a dated day in {selectedProgram.weeks[0]?.name ?? "the first week"}, then add its prescriptions.</Text></View>{!isAddingWorkout ? <Pressable className="min-h-10 flex-row items-center justify-center gap-2 rounded-md bg-ink px-3 py-2" onPress={() => openWorkoutCreator()} accessibilityLabel="Add the first workout"><Plus size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable> : null}</View>{isAddingWorkout ? <View className="mt-4 border-t border-fog pt-4"><View className="flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.name} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, name: value }))} placeholder="Workout name, e.g. Day 1" placeholderTextColor="#688078" accessibilityLabel="Workout name" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.scheduledDate} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, scheduledDate: value }))} placeholder="YYYY-MM-DD" placeholderTextColor="#688078" accessibilityLabel="Workout date" /></View><TextInput className="mt-3 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.focus} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, focus: value }))} placeholder="Workout focus" placeholderTextColor="#688078" accessibilityLabel="Workout focus" /><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingWorkout(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveWorkout()}><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable></View></View> : null}</View> : null}
           {selectedEntry && selectedProgram ? <><View><View className="mb-2 flex-row items-center justify-between"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">All training days</Text><Text className="font-serif text-xs text-[#52675F]">Week {selectedEntry.weekNumber} of {selectedProgram.weeks.length}</Text></View><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="gap-2">{scheduledDays.map((entry) => <Pressable key={entry.day.id} className={`w-36 border p-3 ${entry.day.id === selectedEntry.day.id ? "border-ink bg-ink" : "border-fog bg-paper"}`} onPress={() => selectDay(entry.day.id)} accessibilityLabel={`Open ${entry.weekName}, ${entry.day.name}`}><Text className={`font-serif text-xs font-bold ${entry.day.id === selectedEntry.day.id ? "text-[#FFFFFFCC]" : "text-[#688078]"}`}>Week {entry.weekNumber}</Text><Text className={`mt-1 font-serif text-sm font-bold ${entry.day.id === selectedEntry.day.id ? "text-white" : "text-ink"}`}>{entry.day.name}</Text><Text className={`mt-1 font-serif text-xs ${entry.day.id === selectedEntry.day.id ? "text-[#FFFFFFCC]" : "text-[#52675F]"}`}>{formatDate(entry.day.scheduledDate)}</Text></Pressable>)}</ScrollView></View>
-            <View className="flex-col gap-4 border-y border-fog bg-canvas py-5 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{selectedEntry.weekName} · {formatDate(selectedEntry.day.scheduledDate)}</Text><Text className="mt-1 font-serif text-2xl font-bold text-ink">{selectedEntry.day.name}</Text><Text className="mt-1 font-serif text-sm leading-6 text-[#52675F]">{selectedEntry.day.focus}</Text></View><View className="flex-row flex-wrap gap-2">{isCoach ? <><Pressable className="min-h-10 flex-row items-center gap-2 rounded-md bg-ink px-3 py-2" onPress={() => openWorkoutCreator()} accessibilityLabel="Add workout day to training log"><Plus size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold text-white">Workout</Text></Pressable><Pressable className="min-h-10 flex-row items-center gap-2 rounded-md border border-fog bg-paper px-3 py-2" onPress={openAccessoryCreator} accessibilityLabel="Add accessory to selected workout"><Plus size={16} color="#17212B" /><Text className="font-serif text-sm font-bold text-ink">Accessory</Text></Pressable></> : null}<Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === 0} onPress={() => selectDay(scheduledDays[selectedDayIndex - 1].day.id)} accessibilityLabel="Open previous training day"><ChevronLeft size={18} color="#17212B" /></Pressable><Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === scheduledDays.length - 1} onPress={() => selectDay(scheduledDays[selectedDayIndex + 1].day.id)} accessibilityLabel="Open next training day"><ChevronRight size={18} color="#17212B" /></Pressable></View></View>
+            <View className="flex-col gap-4 border-y border-fog bg-canvas py-5 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{selectedEntry.weekName} · {formatDate(selectedEntry.day.scheduledDate)}</Text><Text className="mt-1 font-serif text-2xl font-bold text-ink">{selectedEntry.day.name}</Text><Text className="mt-1 font-serif text-sm leading-6 text-[#52675F]">{selectedEntry.day.focus}</Text></View><View className="flex-row flex-wrap gap-2">{isAthletesCoach ? <>{(["squat", "bench", "deadlift"] as const).map((category) => <Pressable key={category} className="min-h-10 flex-row items-center gap-2 rounded-md bg-ink px-3 py-2" onPress={() => void addPrimaryLift(category)} accessibilityLabel={`Add ${category} to selected workout`}><Plus size={16} color="#FFFFFF" /><Text className="font-serif text-sm font-bold capitalize text-white">{category}</Text></Pressable>)}<Pressable className="min-h-10 flex-row items-center gap-2 rounded-md border border-fog bg-paper px-3 py-2" onPress={openAccessoryCreator} accessibilityLabel="Add accessory to selected workout"><Plus size={16} color="#17212B" /><Text className="font-serif text-sm font-bold text-ink">Accessories</Text></Pressable></> : null}<Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === 0} onPress={() => selectDay(scheduledDays[selectedDayIndex - 1].day.id)} accessibilityLabel="Open previous training day"><ChevronLeft size={18} color="#17212B" /></Pressable><Pressable className="h-10 w-10 items-center justify-center rounded-md border border-fog bg-paper disabled:opacity-40" disabled={selectedDayIndex === scheduledDays.length - 1} onPress={() => selectDay(scheduledDays[selectedDayIndex + 1].day.id)} accessibilityLabel="Open next training day"><ChevronRight size={18} color="#17212B" /></Pressable></View></View>
             {isCoach && isAddingWorkout ? <View className="border border-fog bg-paper p-4"><View className="flex-row items-center justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">New workout</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add to {selectedEntry.weekName}</Text></View><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-fog" onPress={() => setIsAddingWorkout(false)} accessibilityLabel="Close new workout form"><X size={17} color="#17212B" /></Pressable></View><View className="mt-4 flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.name} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, name: value }))} placeholder="Workout name, e.g. Day 3" placeholderTextColor="#688078" accessibilityLabel="Workout name" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.scheduledDate} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, scheduledDate: value }))} placeholder="YYYY-MM-DD" placeholderTextColor="#688078" accessibilityLabel="Workout date" /></View><TextInput className="mt-3 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={workoutDraft.focus} onChangeText={(value) => setWorkoutDraft((draft) => ({ ...draft, focus: value }))} placeholder="Workout focus" placeholderTextColor="#688078" accessibilityLabel="Workout focus" /><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingWorkout(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveWorkout()}><Text className="font-serif text-sm font-bold text-white">Add workout</Text></Pressable></View></View> : null}
             {isCoach && isAddingAccessory ? <View className="border border-fog bg-paper p-4"><View className="flex-row items-center justify-between"><View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Accessory prescription</Text><Text className="mt-1 font-serif text-lg font-bold text-ink">Add to {selectedEntry.day.name}</Text></View><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-fog" onPress={() => setIsAddingAccessory(false)} accessibilityLabel="Close accessory form"><X size={17} color="#17212B" /></Pressable></View><TextInput className="mt-4 min-h-11 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.name} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, name: value }))} placeholder="Accessory name, e.g. Chest-supported row" placeholderTextColor="#688078" accessibilityLabel="Accessory name" /><View className="mt-3 flex-col gap-3 sm:flex-row"><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.sets} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, sets: value }))} keyboardType="number-pad" placeholder="Sets" placeholderTextColor="#688078" accessibilityLabel="Accessory sets" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.repetitions} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, repetitions: value }))} keyboardType="number-pad" placeholder="Reps" placeholderTextColor="#688078" accessibilityLabel="Accessory repetitions" /><TextInput className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink" value={accessoryDraft.prescriptionValue} onChangeText={(value) => setAccessoryDraft((draft) => ({ ...draft, prescriptionValue: value }))} keyboardType="decimal-pad" placeholder="Target" placeholderTextColor="#688078" accessibilityLabel="Accessory prescription target" /></View><View className="mt-3 flex-row flex-wrap gap-2">{(["rpe", "rir", "exact"] as const).map((mode) => <Pressable key={mode} className={`rounded-md border px-3 py-2 ${accessoryDraft.prescriptionMode === mode ? "border-ink bg-ink" : "border-fog bg-canvas"}`} onPress={() => setAccessoryDraft((draft) => ({ ...draft, prescriptionMode: mode }))}><Text className={`font-serif text-sm font-bold ${accessoryDraft.prescriptionMode === mode ? "text-white" : "text-ink"}`}>{mode.toUpperCase()}</Text></Pressable>)}{(["kg", "lb"] as const).map((unit) => <Pressable key={unit} className={`rounded-md border px-3 py-2 ${accessoryDraft.weightUnit === unit ? "border-moss bg-[#2E6F5E1A]" : "border-fog bg-canvas"}`} onPress={() => setAccessoryDraft((draft) => ({ ...draft, weightUnit: unit }))}><Text className="font-serif text-sm font-bold text-ink">{unit}</Text></Pressable>)}</View><View className="mt-3 flex-row justify-end gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => setIsAddingAccessory(false)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveAccessory()}><Text className="font-serif text-sm font-bold text-white">Add accessory</Text></Pressable></View></View> : null}
             <View className="border border-fog bg-paper p-4"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">Session rating</Text><View className="mt-2 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-lg font-bold text-ink">{dayLog?.sessionRating ? `${dayLog.sessionRating} / 10` : "Not rated"}</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">{isCoach ? "Athlete-reported effort for future stress management." : "Rate how demanding this session felt after you train."}</Text></View>{isCoach ? null : <View className="flex-row flex-wrap gap-1.5">{Array.from({ length: 10 }, (_, index) => index + 1).map((rating) => <Pressable key={rating} className={`h-9 w-9 items-center justify-center rounded-md border ${dayLog?.sessionRating === rating ? "border-ink bg-ink" : "border-fog bg-canvas"}`} onPress={() => void saveRating(rating)} accessibilityLabel={`Rate this session ${rating} out of 10`}><Text className={`font-serif text-sm font-bold ${dayLog?.sessionRating === rating ? "text-white" : "text-ink"}`}>{rating}</Text></Pressable>)}</View>}</View></View>
-            {selectedEntry.day.exercises.length ? selectedEntry.day.exercises.map((exercise) => <View key={exercise.id} className="border border-fog bg-paper"><View className="flex-col gap-1 border-b border-fog px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><View><Text className="font-serif text-lg font-bold text-ink">{exercise.name}</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">{exercise.sets} sets · {exercise.repetitions} reps · {prescriptionLabel(exercise)}</Text></View><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{exercise.category}</Text></View>{Array.from({ length: exercise.sets }, (_, index) => {
+            {selectedEntry.day.exercises.length ? selectedEntry.day.exercises.map((exercise) => <View key={exercise.id} className="border border-fog bg-paper"><View className="flex-col gap-3 border-b border-fog px-4 py-4 sm:flex-row sm:items-center sm:justify-between"><View className="flex-1"><Text className="font-serif text-lg font-bold text-ink">{exercise.name}</Text><Text className="mt-1 font-serif text-sm text-[#52675F]">{exercise.sets} sets · {exercise.repetitions} reps · {prescriptionLabel(exercise)}</Text></View><View className="flex-row items-center gap-2"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">{exercise.category}</Text>{isAthletesCoach ? <><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-fog bg-canvas" onPress={() => beginExerciseEditing(exercise)} accessibilityLabel={`Edit ${exercise.name}`}><Pencil size={15} color="#17212B" /></Pressable><Pressable className="h-9 w-9 items-center justify-center rounded-md border border-signal bg-canvas" onPress={() => setExercisePendingRemoval(exercise)} accessibilityLabel={`Remove ${exercise.name}`}><Trash2 size={15} color="#FF3B45" /></Pressable></> : null}</View></View>{isAthletesCoach && editingExercise?.id === exercise.id && exerciseDraft ? <View className="gap-3 border-b border-fog bg-canvas p-4"><TextInput className="min-h-11 border border-fog bg-paper px-3 font-serif text-base text-ink" value={exerciseDraft.name} onChangeText={(name) => setExerciseDraft((draft) => draft ? { ...draft, name } : draft)} accessibilityLabel="Exercise name" /><View className="flex-row flex-wrap gap-3"><TextInput className="min-h-11 min-w-24 flex-1 border border-fog bg-paper px-3 font-serif text-base text-ink" value={exerciseDraft.sets} onChangeText={(sets) => setExerciseDraft((draft) => draft ? { ...draft, sets } : draft)} keyboardType="number-pad" placeholder="Sets" accessibilityLabel="Exercise sets" /><TextInput className="min-h-11 min-w-24 flex-1 border border-fog bg-paper px-3 font-serif text-base text-ink" value={exerciseDraft.repetitions} onChangeText={(repetitions) => setExerciseDraft((draft) => draft ? { ...draft, repetitions } : draft)} keyboardType="number-pad" placeholder="Reps" accessibilityLabel="Exercise repetitions" /><TextInput className="min-h-11 min-w-24 flex-1 border border-fog bg-paper px-3 font-serif text-base text-ink" value={exerciseDraft.prescriptionValue} onChangeText={(prescriptionValue) => setExerciseDraft((draft) => draft ? { ...draft, prescriptionValue } : draft)} keyboardType="decimal-pad" placeholder="Target" accessibilityLabel="Exercise prescription target" /></View><View className="flex-row flex-wrap justify-between gap-2"><View className="flex-row flex-wrap gap-2">{(["rpe", "rir", "percent", "exact"] as const).map((mode) => <Pressable key={mode} className={`rounded-md border px-3 py-2 ${exerciseDraft.prescriptionMode === mode ? "border-ink bg-ink" : "border-fog bg-paper"}`} onPress={() => setExerciseDraft((draft) => draft ? { ...draft, prescriptionMode: mode } : draft)}><Text className={`font-serif text-xs font-bold uppercase ${exerciseDraft.prescriptionMode === mode ? "text-white" : "text-ink"}`}>{mode}</Text></Pressable>)}</View><View className="flex-row gap-2"><Pressable className="rounded-md border border-fog px-3 py-2" onPress={() => { setEditingExercise(null); setExerciseDraft(null); }}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="rounded-md bg-ink px-3 py-2" onPress={() => void saveExercise()}><Text className="font-serif text-sm font-bold text-white">Save</Text></Pressable></View></View></View> : null}{Array.from({ length: exercise.sets }, (_, index) => {
               const setNumber = index + 1;
               const setLog = getSetLog(dayLog?.sets ?? [], exercise.id, setNumber);
               const status = setLog?.completionStatus ?? "pending";
@@ -512,6 +629,16 @@ export function TrainingLogScreen() {
           </> : <View className="items-center border border-fog bg-paper px-5 py-12"><CalendarDays size={25} color="#688078" /><Text className="mt-3 font-serif text-base font-bold text-ink">No training days in this program</Text></View>}</> : null}
         {!isLoading && !athletePrograms.length ? <View className="items-center border border-fog bg-paper px-5 py-12"><CalendarDays size={25} color="#688078" /><Text className="mt-3 font-serif text-base font-bold text-ink">No training program available</Text><Text className="mt-1 text-center font-serif text-sm text-[#52675F]">{isCoach ? "Create a program for the selected athlete before opening logs." : "Your coach has not assigned a program yet."}</Text></View> : null}
       </ScrollView>
+      <Modal transparent animationType="fade" visible={exercisePendingRemoval !== null} onRequestClose={() => setExercisePendingRemoval(null)}><View className="flex-1 items-center justify-center bg-black/60 px-5"><View className="w-full max-w-md border border-fog bg-paper p-5"><Text className="font-serif text-xs font-bold uppercase tracking-widest text-signal">Confirm removal</Text><Text className="mt-2 font-heading text-2xl uppercase text-ink">Remove exercise?</Text><Text className="mt-3 font-serif text-sm leading-6 text-muted">Remove {exercisePendingRemoval?.name ?? "this exercise"} and its set data from this workout? This action cannot be undone.</Text><View className="mt-5 flex-row justify-end gap-2"><Pressable className="min-h-11 border border-fog px-4 py-3" onPress={() => setExercisePendingRemoval(null)}><Text className="font-serif text-sm font-bold text-ink">Cancel</Text></Pressable><Pressable className="min-h-11 bg-signal px-4 py-3" onPress={() => void confirmExerciseRemoval()}><Text className="font-serif text-sm font-bold text-white">Remove</Text></Pressable></View></View></View></Modal>
+      {isChoosingAccessory ? <AccessoryExercisePicker
+        value={accessoryDraft.name}
+        openOnMount
+        onClose={() => setIsChoosingAccessory(false)}
+        onSelect={(name) => {
+          setAccessoryDraft((draft) => ({ ...draft, name }));
+          setIsAddingAccessory(true);
+        }}
+      /> : null}
       <InstagramLinkModal visible={instagramTarget !== null} exerciseName={instagramTarget ? `${instagramTarget.exerciseName} · set ${instagramTarget.setNumber}` : ""} onClose={() => setInstagramTarget(null)} onSave={saveInstagramLink} />
       <VideoAnalysisModal visible={isVideoAnalysisOpen} targets={analysisTargets} onClose={() => setIsVideoAnalysisOpen(false)} onSave={saveVideoAnalysis} />
     </AppShell>

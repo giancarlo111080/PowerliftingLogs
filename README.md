@@ -10,6 +10,31 @@ Registration is open for independent coaches and athletes at `/register`. A coac
 
 The sign-in screen also offers **Forgot password?**. In `Development` and `LocalPostgres`, the API returns a hashed, single-use, one-hour reset link directly to the screen so local recovery works without an email provider. The presence of that link can reveal whether a local account exists, so `Authentication__ExposePasswordResetLink` must remain disabled on public deployments. Production keeps the enumeration-safe response and sends the link through Resend. Completing a reset revokes previously issued sessions. Set `Client__PasswordResetUrl` to the client callback, such as `https://app.example.com/reset-password`. Fixed GitHub Pages demo accounts do not support password changes.
 
+### Configure Resend Email
+
+The API sends Iron Forge branded invitation and password-reset emails through Resend. Never commit a Resend API key. If a key is pasted into chat, an issue, a log, or source control, revoke it in the Resend dashboard and create a replacement before continuing.
+
+For local development, store the replacement key with .NET user-secrets. Replace `re_xxxxxxxxx` with the real, newly generated API key:
+
+```powershell
+dotnet user-secrets set "Email:Resend:ApiKey" "re_xxxxxxxxx" --project src/PowerliftingProgram.Api
+dotnet user-secrets set "Email:Resend:From" "Iron Forge <onboarding@resend.dev>" --project src/PowerliftingProgram.Api
+dotnet user-secrets set "Client:RegistrationUrl" "http://localhost:8081/register" --project src/PowerliftingProgram.Api
+dotnet user-secrets set "Client:PasswordResetUrl" "http://localhost:8081/reset-password" --project src/PowerliftingProgram.Api
+dotnet user-secrets set "Authentication:ExposePasswordResetLink" "false" --project src/PowerliftingProgram.Api
+```
+
+`onboarding@resend.dev` is only for initial Resend testing and normally sends only to the Resend account owner's email. To email real athletes:
+
+1. In Resend, open **Domains**, choose **Add Domain**, and enter a domain you own, such as `mail.ironforge.app`.
+2. At the DNS host for that domain, add every record Resend displays. Copy the record type, host/name, and value exactly. These normally include DKIM TXT records and an SPF TXT record for the return-path subdomain.
+3. Add a DMARC TXT record at `_dmarc.ironforge.app`. Start with `v=DMARC1; p=none; rua=mailto:dmarc@ironforge.app`, review reports, then move to `p=quarantine` or `p=reject` when legitimate mail is aligned.
+4. Wait for DNS propagation, then choose **Verify DNS Records** in Resend. Do not add a second SPF TXT record at the same hostname; merge authorized senders into one SPF policy when necessary.
+5. Change the sender to a verified address, such as `Iron Forge <notifications@ironforge.app>`, in user-secrets locally and in the production API host's secret/configuration store.
+6. Set the production callback URLs to the public HTTPS client routes, for example `https://app.ironforge.app/register` and `https://app.ironforge.app/reset-password`.
+
+The API key belongs only on the API server. It must never use an `EXPO_PUBLIC_` variable or be bundled into the Expo client.
+
 The coach-only **Programs** route manages reusable master templates: `Template -> Weeks -> Days -> Exercises -> Sets x Reps @ RPE / %1RM / exact load`. Assigning a template clones it into a dated, active live training log for exactly one linked athlete. The master template is unchanged afterward; coaches can update a live training day through the API without mutating the source template. In Training Log, athletes record completed loads, reps, and statuses, and coaches can review and adjust the assigned work.
 
 ## System Overview and Architecture
@@ -127,6 +152,37 @@ The durable PostgreSQL schema is defined by the migrations in `PowerliftingProgr
    ```powershell
    dotnet run --project src/PowerliftingProgram.Api
    ```
+
+### Reset PostgreSQL for Workflow Testing
+
+To delete all local accounts, invitations, coaching assignments, programs, training logs, and events, stop the API and run:
+
+```powershell
+.\database\scripts\Reset-LocalPostgres.ps1
+```
+
+The script asks for confirmation, recreates only the local `powerlifting_program` database, and applies every EF migration. The empty database is then ready to test this flow from the beginning:
+
+1. Register a coach account.
+2. Switch the coach to **My Training** and verify its independent lifter profile.
+3. Invite a new lifter and accept the registration link.
+4. Invite an existing account and sign in through its invitation link.
+5. Add concurrent specialist or temporary coaching assignments.
+6. Revoke or transfer a primary coach and verify coaching history and access.
+
+For an automated reset without the confirmation prompt, use `-Force`:
+
+```powershell
+.\database\scripts\Reset-LocalPostgres.ps1 -Force
+```
+
+To reset and then load the deterministic sample fixture, use:
+
+```powershell
+.\database\scripts\Reset-LocalPostgres.ps1 -Force -SeedSampleData
+```
+
+This script is intentionally limited to the Docker Compose local database. Do not adapt it to a shared or production connection string.
 
 ### Open the Local PostgreSQL Database
 

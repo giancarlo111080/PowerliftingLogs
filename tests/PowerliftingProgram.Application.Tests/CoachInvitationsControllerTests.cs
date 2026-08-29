@@ -28,7 +28,9 @@ public sealed class CoachInvitationsControllerTests
             Sex = AthleteSex.PreferNotToSay,
             CompetitionWeightClass = "Unspecified"
         };
-        database.AddRange(coach, validAthlete, legacyAthlete, profile);
+        var validAssignment = CreateAssignment(coach, validAthlete);
+        var legacyAssignment = CreateAssignment(coach, legacyAthlete);
+        database.AddRange(coach, validAthlete, legacyAthlete, profile, validAssignment, legacyAssignment);
         await database.SaveChangesAsync();
         var controller = CreateController(database, coach.Id);
 
@@ -56,11 +58,62 @@ public sealed class CoachInvitationsControllerTests
         var created = Assert.IsType<CreatedResult>(result.Result);
         var response = Assert.IsType<CoachInvitationResponse>(created.Value);
         Assert.False(response.EmailSent);
-        Assert.StartsWith("https://example.test/register?token=", response.RegistrationUrl);
-        Assert.Equal(response.RegistrationUrl, emailService.RegistrationUrl);
-        var storedInvitation = await Assert.SingleAsync(database.CoachInvitations);
-        var rawToken = new Uri(response.RegistrationUrl).Query.Split('=', 2)[1];
+        Assert.StartsWith("https://example.test/register?token=", response.AcceptanceUrl);
+        Assert.False(response.RecipientHasAccount);
+        Assert.Equal(response.AcceptanceUrl, emailService.RegistrationUrl);
+        var storedInvitations = await database.CoachInvitations.ToListAsync();
+        var storedInvitation = Assert.Single(storedInvitations);
+        var rawToken = new Uri(response.AcceptanceUrl).Query.Split('=', 2)[1];
         Assert.NotEqual(rawToken, storedInvitation.TokenHash);
+    }
+
+    [Fact]
+    public async Task CreateInvitation_ForExistingCoach_ReturnsInvitationLink()
+    {
+        await using var database = CreateDatabase();
+        var coach = CreateCoach();
+        var existingCoach = new PlatformUser
+        {
+            Email = "coach2@example.com",
+            NormalizedEmail = "COACH2@EXAMPLE.COM",
+            DisplayName = "Coach Two",
+            PasswordHash = "existing-password-hash",
+            Role = PlatformRole.Coach,
+            CanCoach = true
+        };
+        database.AddRange(coach, existingCoach);
+        await database.SaveChangesAsync();
+        var controller = CreateController(database, coach.Id);
+
+        var result = await controller.CreateInvitation(new CreateCoachInvitationRequest(existingCoach.Email), CancellationToken.None);
+
+        var created = Assert.IsType<CreatedResult>(result.Result);
+        var response = Assert.IsType<CoachInvitationResponse>(created.Value);
+        Assert.True(response.RecipientHasAccount);
+        Assert.StartsWith("https://example.test/invitation?token=", response.AcceptanceUrl);
+    }
+
+    [Fact]
+    public async Task CreateInvitation_WhenPendingInviteExists_RejectsDuplicate()
+    {
+        await using var database = CreateDatabase();
+        var coach = CreateCoach();
+        var invitation = new CoachInvitation
+        {
+            CoachId = coach.Id,
+            RecipientEmail = "ATHLETE@EXAMPLE.COM",
+            TokenHash = "existing-token-hash",
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+            Role = CoachingRole.Strength
+        };
+        database.AddRange(coach, invitation);
+        await database.SaveChangesAsync();
+        var controller = CreateController(database, coach.Id);
+
+        var result = await controller.CreateInvitation(new CreateCoachInvitationRequest("athlete@example.com"), CancellationToken.None);
+
+        Assert.Equal(400, Assert.IsAssignableFrom<ObjectResult>(result.Result).StatusCode);
+        Assert.Single(await database.CoachInvitations.ToListAsync());
     }
 
     private static CoachInvitationsController CreateController(TrainingDbContext database, Guid coachId, IInvitationEmailService? emailService = null)
@@ -68,6 +121,7 @@ public sealed class CoachInvitationsControllerTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Client:RegistrationUrl"] = "https://example.test/register"
+            , ["Client:InvitationUrl"] = "https://example.test/invitation"
         }).Build();
         return new CoachInvitationsController(database, emailService ?? new UndeliveredInvitationEmailService(), configuration)
         {
@@ -91,7 +145,8 @@ public sealed class CoachInvitationsControllerTests
         NormalizedEmail = "COACH@EXAMPLE.COM",
         DisplayName = "Test Coach",
         PasswordHash = "not-used",
-        Role = PlatformRole.Coach
+        Role = PlatformRole.Coach,
+        CanCoach = true
     };
 
     private static PlatformUser CreateAthlete(Guid coachId, string email, string displayName) => new()
@@ -102,6 +157,16 @@ public sealed class CoachInvitationsControllerTests
         PasswordHash = "not-used",
         Role = PlatformRole.Athlete,
         CoachId = coachId
+    };
+
+    private static CoachingAssignment CreateAssignment(PlatformUser coach, PlatformUser athlete) => new()
+    {
+        CoachId = coach.Id,
+        AthleteUserId = athlete.Id,
+        Role = CoachingRole.Strength,
+        AccessLevel = CoachingAccessLevel.Full,
+        Status = CoachingAssignmentStatus.Active,
+        IsPrimary = true
     };
 
     private static TrainingDbContext CreateDatabase()

@@ -4,8 +4,12 @@ export interface AccountResponse {
   id: string;
   displayName: string;
   email: string;
+  countryCode: string | null;
   role: string;
+  canCoach: boolean;
+  canTrain: boolean;
   coachId: string | null;
+  coachName: string | null;
   athleteProfileId: string | null;
 }
 
@@ -18,14 +22,28 @@ export interface InvitationContextResponse {
   coachName: string;
   recipientEmail: string;
   expiresAt: string;
+  existingAccount: boolean;
+  role: "strength" | "nutrition" | "rehab" | "technique" | "meetDay";
+  accessLevel: "readOnly" | "comment" | "program" | "full";
+  isPrimary: boolean;
 }
 
 export interface CoachInvitationResponse {
   id: string;
   recipientEmail: string;
   expiresAt: string;
-  registrationUrl: string;
+  acceptanceUrl: string;
+  recipientHasAccount: boolean;
   emailSent: boolean;
+}
+
+export type ExerciseBodyPart = "back" | "chest" | "shoulders" | "arms" | "legs" | "glutes" | "core";
+
+export interface ExerciseLibraryItemResponse {
+  id: string;
+  name: string;
+  bodyPart: ExerciseBodyPart;
+  isSystem: boolean;
 }
 
 export type PerformanceEventKind = "recoveryCheckIn" | "techniqueObservation" | "recommendation" | "coachDecision" | "programVersion" | "competitionPlan" | "competitionAttempt" | "competitionResult" | "consentGrant" | "modelPrediction" | "videoAnnotation" | "athleteGroup" | "exerciseLibraryItem" | "exceptionDisposition";
@@ -114,6 +132,22 @@ export interface LiveTrainingLogResponse {
   }>;
 }
 
+export interface LiveTrainingDayUpdateRequest {
+  name: string;
+  focus: string;
+  scheduledFor: string;
+  exercises: Array<{
+    exerciseId: string;
+    name: string;
+    exerciseType: LiveTrainingExerciseResponse["exerciseType"];
+    sets: number;
+    repetitions: number;
+    prescriptionMode: LiveTrainingExerciseResponse["prescriptionMode"];
+    prescriptionValue: number;
+    weightUnit: "kg" | "lb";
+  }>;
+}
+
 export interface LoggedSetRequest {
   idempotencyKey: string;
   athleteProfileId: string;
@@ -151,6 +185,7 @@ export const staticDemoCredentials = {
 } as const;
 
 const apiBaseUrl = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:5080").replace(/\/$/, "");
+const requestTimeoutMs = 8_000;
 
 export class PlatformApiError extends Error {
   constructor(message: string, public readonly status: number) {
@@ -165,9 +200,13 @@ const staticDemoAccounts: Array<{ password: string; account: AccountResponse }> 
       id: "c2f9e76a-bc73-43e1-bd0c-0d761cc2bc20",
       displayName: "Coach Taylor",
       email: staticDemoCredentials.coach.email,
+      countryCode: "US",
       role: "COACH",
+      canCoach: true,
+      canTrain: false,
       coachId: null,
-      athleteProfileId: null
+      coachName: null,
+      athleteProfileId: "profile-coach-taylor"
     }
   },
   {
@@ -176,8 +215,12 @@ const staticDemoAccounts: Array<{ password: string; account: AccountResponse }> 
       id: "platform-alex-morgan",
       displayName: "Alex Morgan",
       email: staticDemoCredentials.athlete.email,
+      countryCode: "US",
       role: "ATHLETE",
+      canCoach: false,
+      canTrain: true,
       coachId: "c2f9e76a-bc73-43e1-bd0c-0d761cc2bc20",
+      coachName: "Coach Taylor",
       athleteProfileId: "a9b07d17-ef82-4b73-a79c-ae00ca5ea6d9"
     }
   }
@@ -201,9 +244,12 @@ function staticDemoError(message: string, status = 400): Promise<never> {
 
 async function request<T>(path: string, init: RequestInit = {}, accessToken?: string): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
     response = await fetch(`${apiBaseUrl}${path}`, {
       ...init,
+      signal: init.signal ?? controller.signal,
       headers: {
         Accept: "application/json",
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -214,6 +260,9 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
   }
   catch {
     throw new PlatformApiError(`Could not reach the Iron Forge API at ${apiBaseUrl}. Confirm the API is running and restart it after changing CORS settings.`, 0);
+  }
+  finally {
+    clearTimeout(timeout);
   }
   if (!response.ok) {
     let message = "The Iron Forge server could not complete this request.";
@@ -232,17 +281,17 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
   return response.json() as Promise<T>;
 }
 
-export function signIn(email: string, password: string) {
+export function signIn(email: string, password: string, invitationToken?: string) {
   if (isStaticDemo) {
     const demoAccount = staticDemoAccounts.find(({ account, password: demoPassword }) => account.email.toLowerCase() === email.trim().toLowerCase() && demoPassword === password);
     return demoAccount
       ? Promise.resolve({ accessToken: staticDemoToken(demoAccount.account), account: demoAccount.account })
       : staticDemoError("Use one of the supplied Iron Forge demo accounts.", 401);
   }
-  return request<SessionResponse>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+  return request<SessionResponse>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, invitationToken }) });
 }
 
-export function registerAccount(input: { displayName: string; email: string; password: string; role: PlatformRole; invitationToken?: string }) {
+export function registerAccount(input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string }) {
   if (isStaticDemo) {
     return staticDemoError("Account registration is unavailable in the static demo. Deploy the API to enable real accounts.");
   }
@@ -270,6 +319,13 @@ export function getCoachAthletes(accessToken: string) {
     return account?.role === "COACH" ? Promise.resolve(staticDemoAthletes) : staticDemoError("Coach access is required.", 403);
   }
   return request<CoachAthleteResponse[]>("/api/coach/athletes", {}, accessToken);
+}
+
+export function getExerciseLibrary(accessToken: string) {
+  if (isStaticDemo) {
+    return Promise.resolve([] as ExerciseLibraryItemResponse[]);
+  }
+  return request<ExerciseLibraryItemResponse[]>("/api/exercise-library", {}, accessToken);
 }
 
 export function createAthleteInvitation(accessToken: string, email: string) {
@@ -321,34 +377,35 @@ export function deletePerformanceEvents(accessToken: string, athleteProfileId: s
   return request<void>(`/api/performance/athletes/${encodeURIComponent(athleteProfileId)}/events`, { method: "DELETE" }, accessToken);
 }
 
-export async function getCurrentLiveTrainingLog(accessToken: string) {
+export async function getCurrentLiveTrainingLog(accessToken: string): Promise<LiveTrainingLogResponse | null> {
   if (isStaticDemo) {
     return null;
   }
   try {
-    return await request<LiveTrainingLogResponse>("/api/live-training/current", {}, accessToken);
+    return await request<LiveTrainingLogResponse | undefined>("/api/live-training/current", {}, accessToken) ?? null;
   }
   catch (error) {
-    if (error instanceof PlatformApiError && error.status === 404) {
-      return null;
-    }
     throw error;
   }
 }
 
-export async function getAthleteLiveTrainingLog(accessToken: string, athleteProfileId: string) {
+export async function getAthleteLiveTrainingLog(accessToken: string, athleteProfileId: string): Promise<LiveTrainingLogResponse | null> {
   if (isStaticDemo) {
     return null;
   }
   try {
-    return await request<LiveTrainingLogResponse>(`/api/live-training/athletes/${encodeURIComponent(athleteProfileId)}`, {}, accessToken);
+    return await request<LiveTrainingLogResponse | undefined>(`/api/live-training/athletes/${encodeURIComponent(athleteProfileId)}`, {}, accessToken) ?? null;
   }
   catch (error) {
-    if (error instanceof PlatformApiError && error.status === 404) {
-      return null;
-    }
     throw error;
   }
+}
+
+export function updateLiveTrainingDay(accessToken: string, trainingDayId: string, update: LiveTrainingDayUpdateRequest) {
+  if (isStaticDemo) {
+    return Promise.resolve();
+  }
+  return request<void>(`/api/live-training/days/${encodeURIComponent(trainingDayId)}`, { method: "PUT", body: JSON.stringify(update) }, accessToken);
 }
 
 export function synchronizeLoggedSet(accessToken: string, input: LoggedSetRequest) {
@@ -356,4 +413,89 @@ export function synchronizeLoggedSet(accessToken: string, input: LoggedSetReques
     return staticDemoError("Training synchronization requires the hosted API.");
   }
   return request<SyncCommandOutcome>("/api/sync/logged-set", { method: "POST", body: JSON.stringify(input) }, accessToken);
+}
+
+export function leaveCurrentCoach(accessToken: string) {
+  return request<AccountResponse>("/api/auth/coach", { method: "DELETE" }, accessToken);
+}
+
+export interface CoachingAssignmentResponse {
+  id: string;
+  coachId: string;
+  coachName: string;
+  athleteUserId: string;
+  athleteName: string;
+  role: "strength" | "nutrition" | "rehab" | "technique" | "meetDay";
+  accessLevel: "readOnly" | "comment" | "program" | "full";
+  status: "pending" | "active" | "completed" | "revoked" | "declined";
+  isPrimary: boolean;
+  startsAt: string;
+  endsAt: string | null;
+  movementScope: string | null;
+}
+
+export function getCoachingAssignments(accessToken: string) {
+  return request<CoachingAssignmentResponse[]>("/api/coaching-assignments", {}, accessToken);
+}
+
+export function revokeCoachingAssignment(accessToken: string, assignmentId: string) {
+  return request<void>(`/api/coaching-assignments/${encodeURIComponent(assignmentId)}`, { method: "DELETE" }, accessToken);
+}
+
+export interface AthleteCareerResponse {
+  id: string;
+  displayName: string;
+  countryCode: string | null;
+  sex: string;
+  competitionWeightClass: string;
+  bestOfficialTotalKg: number;
+  availableFederations: Array<{ id: string; code: string; name: string; countryCode: string; websiteUrl: string | null }>;
+  memberships: Array<{ id: string; federationCode: string; federationName: string; membershipNumber: string | null; status: string; startsOn: string; endsOn: string | null }>;
+  qualificationProgress: Array<{ id: string; federationCode: string; name: string; scope: string; competitionDivision: string; equipmentCategory: string; requiredTotalKg: number; gapKg: number; qualified: boolean; effectiveFrom: string; effectiveTo: string | null; sourceUrl: string; sourceRetrievedAt: string }>;
+  qualifierTotals: Array<{ id: string; federationCode: string; federationName: string; name: string; scope: string; competitionDivision: string; equipmentCategory: string; sexCategory: string; weightClass: string; qualifierTotalKg: number; effectiveFrom: string; effectiveTo: string | null; sourceUrl: string; sourceRetrievedAt: string }>;
+  results: Array<{ id: string; meetName: string; meetDate: string; countryCode: string; equipmentCategory: string; weightClass: string; totalKg: number; dots: number | null; goodlift: number | null; place: number | null; sourceName: string; sourceUrl: string | null }>;
+  rankings: Array<{ id: string; rankingDate: string; scope: string; scopeCode: string; equipmentCategory: string; weightClass: string; metric: string; score: number; rank: number; rankedLifterCount: number; sourceName: string; sourceUrl: string }>;
+  externalIdentities: Array<{ id: string; provider: string; externalId: string; profileUrl: string | null; verifiedByAthlete: boolean }>;
+  programHistory: Array<{ id: string; name: string; tag: string; startsOn: string; endsOn: string; isActive: boolean; coachId: string | null; coachName: string | null }>;
+}
+
+function normalizeAthleteCareer(response: AthleteCareerResponse): AthleteCareerResponse {
+  return {
+    ...response,
+    availableFederations: Array.isArray(response.availableFederations) ? response.availableFederations : [],
+    memberships: Array.isArray(response.memberships) ? response.memberships : [],
+    qualificationProgress: Array.isArray(response.qualificationProgress) ? response.qualificationProgress : [],
+    qualifierTotals: Array.isArray(response.qualifierTotals) ? response.qualifierTotals : [],
+    results: Array.isArray(response.results) ? response.results : [],
+    rankings: Array.isArray(response.rankings) ? response.rankings : [],
+    externalIdentities: Array.isArray(response.externalIdentities) ? response.externalIdentities : [],
+    programHistory: Array.isArray(response.programHistory) ? response.programHistory : []
+  };
+}
+
+export function getAthleteCareer(accessToken: string, athleteProfileId: string) {
+  if (isStaticDemo) {
+    return Promise.resolve<AthleteCareerResponse>({ id: athleteProfileId, displayName: "Demo athlete", countryCode: null, sex: "Unspecified", competitionWeightClass: "Unspecified", bestOfficialTotalKg: 0, availableFederations: [], memberships: [], qualificationProgress: [], qualifierTotals: [], results: [], rankings: [], externalIdentities: [], programHistory: [] });
+  }
+  return request<AthleteCareerResponse>(`/api/athletes/${encodeURIComponent(athleteProfileId)}/career`, {}, accessToken)
+    .then(normalizeAthleteCareer);
+}
+
+export function updateAthleteCountry(accessToken: string, athleteProfileId: string, countryCode: string | null) {
+  if (isStaticDemo) return Promise.resolve();
+  return request<void>(`/api/athletes/${encodeURIComponent(athleteProfileId)}/career/identity`, { method: "PATCH", body: JSON.stringify({ countryCode }) }, accessToken);
+}
+
+export function addAthleteFederationMembership(accessToken: string, athleteProfileId: string, input: { federationCode: string; membershipNumber?: string; startsOn: string }) {
+  if (isStaticDemo) return staticDemoError("Federation memberships require the hosted API.");
+  return request<{ id: string }>(`/api/athletes/${encodeURIComponent(athleteProfileId)}/career/memberships`, { method: "POST", body: JSON.stringify(input) }, accessToken);
+}
+
+export function linkAthleteExternalIdentity(accessToken: string, athleteProfileId: string, input: { provider: string; externalId: string; profileUrl?: string }) {
+  if (isStaticDemo) return staticDemoError("External competition identities require the hosted API.");
+  return request<{ id: string }>(`/api/athletes/${encodeURIComponent(athleteProfileId)}/career/external-identities`, { method: "POST", body: JSON.stringify(input) }, accessToken);
+}
+
+export function acceptCoachInvitation(accessToken: string, token: string) {
+  return request<AccountResponse>(`/api/auth/invitations/${encodeURIComponent(token)}/accept`, { method: "POST" }, accessToken);
 }

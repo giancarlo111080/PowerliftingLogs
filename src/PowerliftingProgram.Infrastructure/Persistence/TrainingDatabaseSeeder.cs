@@ -199,9 +199,23 @@ public static class TrainingDatabaseSeeder
                 NormalizedEmail = coachEmail.ToUpperInvariant(),
                 DisplayName = "Demo Coach",
                 PasswordHash = passwordHashingService.Hash("LocalDemoCoach!2026"),
-                Role = PlatformRole.Coach
+                Role = PlatformRole.Coach,
+                CanCoach = true
             };
             database.PlatformUsers.Add(coach);
+        }
+
+        var coachProfile = await database.AthleteProfiles.SingleOrDefaultAsync(profile => profile.PlatformUserId == coach.Id, cancellationToken);
+        if (coachProfile is null)
+        {
+            database.AthleteProfiles.Add(new AthleteProfile
+            {
+                PlatformUserId = coach.Id,
+                ExternalUserId = $"platform-{coach.Id}",
+                DisplayName = coach.DisplayName,
+                Sex = AthleteSex.PreferNotToSay,
+                CompetitionWeightClass = "Unspecified"
+            });
         }
 
         var athleteUser = await database.PlatformUsers.SingleOrDefaultAsync(user => user.NormalizedEmail == athleteEmail.ToUpperInvariant(), cancellationToken);

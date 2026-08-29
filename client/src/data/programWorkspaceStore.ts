@@ -3,7 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { useSession } from "../auth/AuthSessionContext";
 import { isLiftVideoAnalysis, type LiftVideoAnalysis } from "../lib/liftAnalysis";
-import { getAthleteLiveTrainingLog, getCurrentLiveTrainingLog, isStaticDemo, PlatformApiError, synchronizeLoggedSet, type LiveSetOutcomeReason, type LiveTrainingLogResponse, type LoggedSetRequest } from "../lib/platformApi";
+import { getAthleteLiveTrainingLog, getCurrentLiveTrainingLog, isStaticDemo, PlatformApiError, synchronizeLoggedSet, updateLiveTrainingDay, type LiveSetOutcomeReason, type LiveTrainingLogResponse, type LoggedSetRequest } from "../lib/platformApi";
 
 export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
 export type ProgramStatus = "draft" | "active" | "completed";
@@ -150,11 +150,15 @@ interface ProgramWorkspaceStore {
   updateTemplate: (templateId: string, input: ProgramTemplateInput) => Promise<void>;
   deleteTemplate: (templateId: string) => Promise<void>;
   addTemplateWeek: (templateId: string) => Promise<void>;
+  deleteTemplateWeek: (templateId: string, weekId: string) => Promise<void>;
+  deleteTemplateDay: (templateId: string, weekId: string, dayId: string) => Promise<void>;
+  ensureTemplateDays: (templateId: string, daysPerWeek: number) => Promise<void>;
   updateTemplateWeek: (templateId: string, weekId: string, name: string) => Promise<void>;
   addTemplateDay: (templateId: string, weekId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<ProgramTemplateDay>;
   updateTemplateDay: (templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<void>;
   addTemplateExercise: (templateId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>) => Promise<ProgramExercise>;
   updateTemplateExercise: (templateId: string, weekId: string, dayId: string, exercise: ProgramExercise) => Promise<void>;
+  deleteTemplateExercise: (templateId: string, weekId: string, dayId: string, exerciseId: string) => Promise<void>;
   assignTemplate: (templateId: string, athleteId: string, startDate: string) => Promise<TrainingProgram>;
   addWeek: (programId: string) => Promise<void>;
   updateWeek: (programId: string, weekId: string, name: string) => Promise<void>;
@@ -727,6 +731,17 @@ function updateProgramStructure(program: TrainingProgram, weekId: string, change
   return { ...program, updatedAt: new Date().toISOString(), weeks: program.weeks.map((week) => week.id === weekId ? change(week) : week) };
 }
 
+function toRemoteExerciseType(category: ExerciseCategory): LiveTrainingLogResponse["weeks"][number]["days"][number]["exercises"][number]["exerciseType"] {
+  if (category === "bench") return "benchPress";
+  return category;
+}
+
+function toRemotePrescriptionMode(mode: PrescriptionMode): LiveTrainingLogResponse["weeks"][number]["days"][number]["exercises"][number]["prescriptionMode"] {
+  if (mode === "percent") return "percentageOfOneRepMax";
+  if (mode === "exact") return "exactLoad";
+  return "rpe";
+}
+
 export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   const { session } = useSession();
   const snapshot = useSyncExternalStore(subscribeToWorkspace, getWorkspaceSnapshot, getWorkspaceSnapshot);
@@ -806,6 +821,28 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     }
   }
 
+  async function persistServerManagedDay(program: TrainingProgram, day: ProgramDay) {
+    if (!program.serverManaged || !session || isStaticDemo) return;
+    if (session.role !== "COACH" || session.activeAthleteId !== program.athleteId) {
+      throw new Error("Only the linked coach can change a server-managed training plan.");
+    }
+    await updateLiveTrainingDay(session.accessToken, day.id, {
+      name: day.name,
+      focus: day.focus,
+      scheduledFor: day.scheduledDate,
+      exercises: day.exercises.map((exercise) => ({
+        exerciseId: exercise.id,
+        name: exercise.name,
+        exerciseType: toRemoteExerciseType(exercise.category),
+        sets: exercise.sets,
+        repetitions: exercise.repetitions,
+        prescriptionMode: toRemotePrescriptionMode(exercise.prescriptionMode),
+        prescriptionValue: exercise.prescriptionValue,
+        weightUnit: exercise.weightUnit
+      }))
+    });
+  }
+
   async function createProgram(athleteId: string, input: ProgramInput) {
     await ensureWorkspaceLoaded();
     const nextProgram: TrainingProgram = { ...input, id: createId("program"), athleteId, updatedAt: new Date().toISOString(), weeks: [createWeek(1)] };
@@ -873,9 +910,70 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   async function addTemplateWeek(templateId: string) {
     await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    if (!template) {
+      throw new Error("The master template is no longer available.");
+    }
+    if (template.weeks.length >= 52) {
+      throw new Error("A master template can contain no more than 52 weeks.");
+    }
     await persistTemplates(templates.map((template) => template.id === templateId
       ? { ...template, updatedAt: new Date().toISOString(), weeks: [...template.weeks, createTemplateWeek(template.weeks.length + 1)] }
       : template));
+  }
+
+  async function deleteTemplateWeek(templateId: string, weekId: string) {
+    await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    if (!template || template.weeks.length <= 1) {
+      throw new Error("A master template must contain at least 1 week.");
+    }
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? { ...candidate, updatedAt: new Date().toISOString(), weeks: candidate.weeks.filter((week) => week.id !== weekId).map((week, index) => ({ ...week, weekNumber: index + 1 })) }
+      : candidate));
+  }
+
+  async function ensureTemplateDays(templateId: string, daysPerWeek: number) {
+    await ensureWorkspaceLoaded();
+    if (!Number.isInteger(daysPerWeek) || daysPerWeek < 1 || daysPerWeek > 7) {
+      throw new Error("Training days per week must be a whole number from 1 to 7.");
+    }
+    const template = templates.find((candidate) => candidate.id === templateId);
+    if (!template) {
+      throw new Error("The master template is no longer available.");
+    }
+    const hasMissingDays = template.weeks.some((week) => week.days.length < daysPerWeek);
+    if (!hasMissingDays) {
+      return;
+    }
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? {
+        ...candidate,
+        updatedAt: new Date().toISOString(),
+        weeks: candidate.weeks.map((week) => ({
+          ...week,
+          days: [...week.days, ...Array.from({ length: Math.max(0, daysPerWeek - week.days.length) }, (_, index) => {
+            const sequence = week.days.length + index + 1;
+            return createTemplateDay(`W${week.weekNumber}D${sequence}`, "", [], sequence);
+          })]
+        }))
+      }
+      : candidate));
+  }
+
+  async function deleteTemplateDay(templateId: string, weekId: string, dayId: string) {
+    await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const week = template?.weeks.find((candidate) => candidate.id === weekId);
+    if (!template || !week) {
+      throw new Error("The template week is no longer available.");
+    }
+    if (week.days.length <= 1) {
+      throw new Error("A template week must contain at least 1 day.");
+    }
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? { ...candidate, updatedAt: new Date().toISOString(), weeks: candidate.weeks.map((candidateWeek) => candidateWeek.id === weekId ? { ...candidateWeek, days: candidateWeek.days.filter((day) => day.id !== dayId).map((day, index) => ({ ...day, sequence: index + 1 })) } : candidateWeek) }
+      : candidate));
   }
 
   async function updateTemplateWeek(templateId: string, weekId: string, name: string) {
@@ -892,7 +990,11 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     if (!template || !targetWeek) {
       throw new Error("The template week is no longer available.");
     }
-    const nextDay = createTemplateDay(day.name.trim() || `Day ${targetWeek.days.length + 1}`, day.focus.trim() || "Training day", [], Math.max(0, ...targetWeek.days.map((currentDay) => currentDay.sequence)) + 1);
+    if (targetWeek.days.length >= 7) {
+      throw new Error("A training week can contain no more than 7 days.");
+    }
+    const sequence = Math.max(0, ...targetWeek.days.map((currentDay) => currentDay.sequence)) + 1;
+    const nextDay = createTemplateDay(day.name.trim() || `W${targetWeek.weekNumber}D${sequence}`, day.focus.trim(), [], sequence);
     await persistTemplates(templates.map((candidate) => candidate.id === templateId
       ? updateTemplateStructure(candidate, weekId, (week) => ({ ...week, days: [...week.days, nextDay] }))
       : candidate));
@@ -902,7 +1004,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   async function updateTemplateDay(templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) {
     await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
-      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() || currentDay.focus } : currentDay) }))
+      ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((currentDay) => currentDay.id === dayId ? { ...currentDay, name: day.name.trim() || currentDay.name, focus: day.focus.trim() } : currentDay) }))
       : template));
   }
 
@@ -924,6 +1026,18 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     await persistTemplates(templates.map((template) => template.id === templateId
       ? updateTemplateStructure(template, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
       : template));
+  }
+
+  async function deleteTemplateExercise(templateId: string, weekId: string, dayId: string, exerciseId: string) {
+    await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const day = template?.weeks.find((week) => week.id === weekId)?.days.find((candidate) => candidate.id === dayId);
+    if (!template || !day) {
+      throw new Error("The template training day is no longer available.");
+    }
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? { ...candidate, updatedAt: new Date().toISOString(), weeks: candidate.weeks.map((week) => week.id === weekId ? { ...week, days: week.days.map((candidateDay) => candidateDay.id === dayId ? { ...candidateDay, exercises: candidateDay.exercises.filter((exercise) => exercise.id !== exerciseId) } : candidateDay) } : week) }
+      : candidate));
   }
 
   async function assignTemplate(templateId: string, athleteId: string, startDate: string): Promise<TrainingProgram> {
@@ -999,6 +1113,9 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     if (!program || !targetWeek) {
       throw new Error("The program week is no longer available.");
     }
+    if (targetWeek.days.length >= 7) {
+      throw new Error("A training week can contain no more than 7 days.");
+    }
     const nextDay = createDay(
       day.name.trim() || `Day ${targetWeek.days.length + 1}`,
       day.focus.trim() || "Training day",
@@ -1033,6 +1150,10 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   async function rescheduleDay(programId: string, weekId: string, dayId: string, scheduledDate: string, updatedBy: DayScheduleAuthor) {
     await ensureWorkspaceLoaded();
+    const currentProgram = programs.find((program) => program.id === programId);
+    const currentDay = currentProgram?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
+    if (!currentProgram || !currentDay) throw new Error("The training day is no longer available.");
+    await persistServerManagedDay(currentProgram, { ...currentDay, scheduledDate, scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() });
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, scheduledDate, scheduleUpdatedBy: updatedBy, scheduleUpdatedAt: new Date().toISOString() } : day) }))
       : program);
@@ -1063,6 +1184,10 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   async function updateExercise(programId: string, weekId: string, dayId: string, exercise: ProgramExercise) {
     await ensureWorkspaceLoaded();
+    const currentProgram = programs.find((program) => program.id === programId);
+    const currentDay = currentProgram?.weeks.find((week) => week.id === weekId)?.days.find((day) => day.id === dayId);
+    if (!currentProgram || !currentDay) throw new Error("The training day is no longer available.");
+    await persistServerManagedDay(currentProgram, { ...currentDay, exercises: currentDay.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) });
     const nextPrograms = programs.map((program) => program.id === programId
       ? updateProgramStructure(program, weekId, (week) => ({ ...week, days: week.days.map((day) => day.id === dayId ? { ...day, exercises: day.exercises.map((currentExercise) => currentExercise.id === exercise.id ? exercise : currentExercise) } : day) }))
       : program);
@@ -1222,11 +1347,15 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     updateTemplate,
     deleteTemplate,
     addTemplateWeek,
+    deleteTemplateWeek,
+    deleteTemplateDay,
+    ensureTemplateDays,
     updateTemplateWeek,
     addTemplateDay,
     updateTemplateDay,
     addTemplateExercise,
     updateTemplateExercise,
+    deleteTemplateExercise,
     assignTemplate,
     addWeek,
     updateWeek,

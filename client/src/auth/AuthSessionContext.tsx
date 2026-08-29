@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from "react";
 import { Platform } from "react-native";
 
-import { getCoachAthletes, getCurrentAccount, registerAccount, signIn, type AccountResponse, type PlatformRole } from "../lib/platformApi";
+import { acceptCoachInvitation, getCoachAthletes, getCurrentAccount, leaveCurrentCoach, registerAccount, signIn, type AccountResponse, type PlatformRole } from "../lib/platformApi";
 
 export type { PlatformRole } from "../lib/platformApi";
 
@@ -10,10 +10,12 @@ export interface PlatformProfile {
   id: string;
   userId: string;
   coachId?: string;
+  coachName?: string;
   role: PlatformRole;
   displayName: string;
   initials: string;
   email: string;
+  countryCode?: string;
   sex?: "Male" | "Female" | "Other";
   bodyWeightKg?: number;
   competitionWeightClass?: string;
@@ -31,6 +33,8 @@ export interface PlatformSession {
   userId: string;
   accessToken: string;
   role: PlatformRole;
+  canCoach: boolean;
+  canTrain: boolean;
   activeAthleteId: string;
 }
 
@@ -40,11 +44,15 @@ interface AuthSessionContextValue {
   profiles: PlatformProfile[];
   currentProfile: PlatformProfile | null;
   activeAthlete: PlatformProfile | null;
-  login: (email: string, password: string) => Promise<void>;
-  register: (input: { displayName: string; email: string; password: string; role: PlatformRole; invitationToken?: string }) => Promise<void>;
+  login: (email: string, password: string, invitationToken?: string) => Promise<void>;
+  register: (input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string }) => Promise<void>;
   logout: () => Promise<void>;
+  switchWorkspace: (role: PlatformRole) => Promise<void>;
   selectAthlete: (athleteProfileId: string) => Promise<void>;
+  refreshAthletes: () => Promise<void>;
   updateCurrentProfile: (changes: Partial<PlatformProfile>) => Promise<void>;
+  leaveCoach: () => Promise<void>;
+  acceptInvitation: (token: string) => Promise<void>;
 }
 
 const sessionStorageKey = "iron-forge/session";
@@ -101,16 +109,18 @@ function normalizeRole(role: string): PlatformRole {
 
 function profileFromAccount(account: AccountResponse): PlatformProfile {
   const role = normalizeRole(account.role);
-  const profileId = role === "ATHLETE" ? account.athleteProfileId ?? account.id : account.id;
+  const profileId = account.athleteProfileId ?? account.id;
   return {
     id: profileId,
     userId: account.id,
     coachId: account.coachId ?? undefined,
+    coachName: account.coachName ?? undefined,
     role,
     displayName: account.displayName,
     initials: initials(account.displayName),
     email: account.email,
-    competitionWeightClass: role === "ATHLETE" ? "Unspecified" : undefined,
+    countryCode: account.countryCode ?? undefined,
+    competitionWeightClass: "Unspecified",
     notificationsEnabled: true
   };
 }
@@ -144,9 +154,14 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
         }
         const account = await getCurrentAccount(persistedSession.accessToken);
         const currentProfile = profileFromAccount(account);
-        const role = normalizeRole(account.role);
+        const preferredRole = normalizeRole(account.role);
+        const canCoach = account.canCoach ?? preferredRole === "COACH";
+        const canTrain = account.canTrain ?? preferredRole === "ATHLETE";
+        const role = persistedSession.role === "ATHLETE" && canTrain
+          ? "ATHLETE"
+          : persistedSession.role === "COACH" && canCoach ? "COACH" : preferredRole === "COACH" && canCoach ? "COACH" : "ATHLETE";
         let roster: Awaited<ReturnType<typeof getCoachAthletes>> = [];
-        if (role === "COACH") {
+        if (canCoach) {
           try {
             roster = await getCoachAthletes(persistedSession.accessToken);
           }
@@ -160,7 +175,7 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
             ? persistedSession.activeAthleteId
             : roster[0]?.athleteProfileId ?? "";
           setProfiles(nextProfiles);
-          setSession({ ...persistedSession, userId: account.id, role, activeAthleteId: role === "ATHLETE" ? currentProfile.id : restoredCoachAthleteId });
+          setSession({ ...persistedSession, userId: account.id, role, canCoach, canTrain, activeAthleteId: role === "ATHLETE" ? currentProfile.id : restoredCoachAthleteId });
         }
       }
       catch {
@@ -179,7 +194,8 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
   }, []);
 
   const currentProfile = session ? profiles.find((profile) => profile.userId === session.userId) ?? null : null;
-  const activeAthlete = session ? profiles.find((profile) => profile.id === session.activeAthleteId && profile.role === "ATHLETE") ?? null : null;
+  const activeAthlete = session ? profiles.find((profile) => profile.id === session.activeAthleteId &&
+    (profile.role === "ATHLETE" || profile.userId === session.userId)) ?? null : null;
 
   async function persist(nextSession: PlatformSession | null, nextProfiles = profiles) {
     if (nextSession) {
@@ -195,10 +211,13 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
   async function establish(account: AccountResponse, accessToken: string) {
     const current = profileFromAccount(account);
     const role = normalizeRole(account.role);
+    const canCoach = account.canCoach ?? role === "COACH";
+    const canTrain = account.canTrain ?? role === "ATHLETE";
     const initialProfiles = mergeProfiles(current, [], profiles);
-    const initialSession = { userId: account.id, accessToken, role, activeAthleteId: role === "ATHLETE" ? current.id : "" };
+    const initialRole: PlatformRole = role === "COACH" && canCoach ? "COACH" : "ATHLETE";
+    const initialSession = { userId: account.id, accessToken, role: initialRole, canCoach, canTrain, activeAthleteId: initialRole === "ATHLETE" ? current.id : "" };
     await persist(initialSession, initialProfiles);
-    if (role !== "COACH") {
+    if (!canCoach) {
       return;
     }
 
@@ -211,12 +230,12 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     }
   }
 
-  async function login(email: string, password: string) {
-    const response = await signIn(email.trim(), password);
+  async function login(email: string, password: string, invitationToken?: string) {
+    const response = await signIn(email.trim(), password, invitationToken);
     await establish(response.account, response.accessToken);
   }
 
-  async function register(input: { displayName: string; email: string; password: string; role: PlatformRole; invitationToken?: string }) {
+  async function register(input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string }) {
     const response = await registerAccount(input);
     await establish(response.account, response.accessToken);
   }
@@ -225,11 +244,35 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     await persist(null, profiles);
   }
 
+  async function switchWorkspace(role: PlatformRole) {
+    if (!session || (role === "COACH" && !session.canCoach) || (role === "ATHLETE" && !session.canTrain) || !currentProfile) return;
+    const activeAthleteId = role === "ATHLETE"
+      ? currentProfile.id
+      : profiles.find((profile) => profile.coachId === session.userId)?.id ?? "";
+    await persist({ ...session, role, activeAthleteId });
+  }
+
   async function selectAthlete(athleteProfileId: string) {
-    if (session?.role !== "COACH" || !profiles.some((profile) => profile.id === athleteProfileId && profile.role === "ATHLETE" && profile.coachId === session.userId)) {
+    if (!session?.canCoach || session.role !== "COACH" || !profiles.some((profile) => profile.id === athleteProfileId && profile.coachId === session.userId)) {
       return;
     }
     await persist({ ...session, activeAthleteId: athleteProfileId });
+  }
+
+  async function refreshAthletes() {
+    if (!session || !session.canCoach) {
+      return;
+    }
+    const roster = await getCoachAthletes(session.accessToken);
+    const current = profiles.find((profile) => profile.userId === session.userId);
+    if (!current) {
+      return;
+    }
+    const nextProfiles = mergeProfiles(current, roster.map((athlete) => athleteProfile(athlete, session.userId)), profiles);
+    const activeAthleteId = roster.some((athlete) => athlete.athleteProfileId === session.activeAthleteId)
+      ? session.activeAthleteId
+      : roster[0]?.athleteProfileId ?? "";
+    await persist({ ...session, activeAthleteId }, nextProfiles);
   }
 
   async function updateCurrentProfile(changes: Partial<PlatformProfile>) {
@@ -240,7 +283,29 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     await persist(session, nextProfiles);
   }
 
-  return <AuthSessionContext.Provider value={{ isLoading, session, profiles, currentProfile, activeAthlete, login, register, logout, selectAthlete, updateCurrentProfile }}>{children}</AuthSessionContext.Provider>;
+  async function leaveCoach() {
+    if (!session || !currentProfile?.coachId) {
+      return;
+    }
+    const account = await leaveCurrentCoach(session.accessToken);
+    const updatedCurrent = { ...currentProfile, ...profileFromAccount(account) };
+    const nextProfiles = profiles.map((profile) => profile.userId === session.userId ? updatedCurrent : profile);
+    const canTrain = account.canTrain ?? account.role.toUpperCase() === "ATHLETE";
+    const role = session.role === "ATHLETE" && !canTrain && session.canCoach ? "COACH" : session.role;
+    await persist({ ...session, role, canTrain, activeAthleteId: role === "ATHLETE" ? updatedCurrent.id : "" }, nextProfiles);
+  }
+
+  async function acceptInvitation(token: string) {
+    if (!session || !currentProfile) {
+      throw new Error("Sign in to accept this coaching invitation.");
+    }
+    const account = await acceptCoachInvitation(session.accessToken, token);
+    const updatedCurrent = { ...currentProfile, ...profileFromAccount(account) };
+    const nextProfiles = profiles.map((profile) => profile.userId === session.userId ? updatedCurrent : profile);
+    await persist({ ...session, role: "ATHLETE", canCoach: account.canCoach, canTrain: true, activeAthleteId: updatedCurrent.id }, nextProfiles);
+  }
+
+  return <AuthSessionContext.Provider value={{ isLoading, session, profiles, currentProfile, activeAthlete, login, register, logout, switchWorkspace, selectAthlete, refreshAthletes, updateCurrentProfile, leaveCoach, acceptInvitation }}>{children}</AuthSessionContext.Provider>;
 }
 
 function athleteProfile(athlete: { athleteProfileId: string; userId: string; displayName: string; email: string }, coachId: string): PlatformProfile {

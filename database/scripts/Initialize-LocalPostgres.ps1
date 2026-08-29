@@ -44,7 +44,13 @@ try {
         throw "PostgreSQL did not become ready within 60 seconds. Run 'docker compose -f $composeFile logs postgres' to diagnose the container."
     }
 
-    dotnet ef database update --project $infrastructureProject --startup-project $apiProject
+    Write-Host "Building the API before applying EF Core migrations..."
+    dotnet build $apiProject
+    if ($LASTEXITCODE -ne 0) {
+        throw "API build failed. Resolve the compiler errors above, then rerun this script."
+    }
+
+    dotnet ef database update --no-build --project $infrastructureProject --startup-project $apiProject
     if ($LASTEXITCODE -ne 0) {
         throw "EF Core migrations failed. The test data was not loaded. Resolve the migration error and rerun this script."
     }

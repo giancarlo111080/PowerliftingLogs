@@ -68,7 +68,7 @@ public sealed class SyncController(
         {
             return Unauthorized();
         }
-        if (!await coachAccessService.CanAccessAthleteAsync(User, request.AthleteProfileId, cancellationToken))
+        if (!await coachAccessService.CanRecordPerformanceAsync(User, request.AthleteProfileId, cancellationToken))
         {
             return Forbid();
         }
@@ -109,7 +109,7 @@ public sealed class SyncController(
     {
         foreach (var athleteProfileId in athleteProfileIds.Distinct())
         {
-            if (!await coachAccessService.CanAccessAthleteAsync(User, athleteProfileId, cancellationToken))
+            if (!await coachAccessService.CanRecordPerformanceAsync(User, athleteProfileId, cancellationToken))
             {
                 return false;
             }

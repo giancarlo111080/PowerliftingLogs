@@ -48,6 +48,7 @@ public partial class TrainingDbContextModelSnapshot : ModelSnapshot
         modelBuilder.Entity("PowerliftingProgram.Domain.Entities.PlatformUser", builder =>
         {
             builder.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+            builder.Property<bool>("CanCoach").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false);
             builder.Property<Guid?>("CoachId").HasColumnType("uuid");
             builder.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
             builder.Property<string>("DisplayName").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)");
@@ -73,6 +74,7 @@ public partial class TrainingDbContextModelSnapshot : ModelSnapshot
             builder.Property<DateTimeOffset?>("AcceptedAt").HasColumnType("timestamp with time zone");
             builder.Property<Guid>("CoachId").HasColumnType("uuid");
             builder.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone");
+            builder.Property<bool>("CanCoach").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false);
             builder.Property<DateTimeOffset>("ExpiresAt").HasColumnType("timestamp with time zone");
             builder.Property<string>("RecipientEmail").IsRequired().HasMaxLength(320).HasColumnType("character varying(320)");
             builder.Property<byte[]>("RowVersion").IsConcurrencyToken().HasColumnType("bytea");

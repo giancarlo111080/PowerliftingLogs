@@ -21,7 +21,7 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
     [Authorize(Roles = "ATHLETE")]
     [HttpGet("current")]
     [ProducesResponseType(typeof(LiveTrainingLogResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<ActionResult<LiveTrainingLogResponse>> GetCurrent(CancellationToken cancellationToken)
     {
         var userId = CoachAccessService.CurrentUserId(User);
@@ -38,14 +38,14 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
             return NotFound();
         }
         var log = await LiveLogQuery().SingleOrDefaultAsync(block => block.AthleteProfileId == athleteProfileId && block.IsActive, cancellationToken);
-        return log is null ? NotFound() : Ok(ToResponse(log));
+        return log is null ? new NoContentResult() : Ok(ToResponse(log));
     }
 
     [Authorize(Roles = "COACH")]
     [HttpGet("athletes/{athleteProfileId:guid}")]
     [ProducesResponseType(typeof(LiveTrainingLogResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<ActionResult<LiveTrainingLogResponse>> GetAthleteLog(Guid athleteProfileId, CancellationToken cancellationToken)
     {
         if (!await coachAccessService.CanAccessAthleteAsync(User, athleteProfileId, cancellationToken))
@@ -53,7 +53,7 @@ public sealed class LiveTrainingLogsController(TrainingDbContext database, Coach
             return Forbid();
         }
         var log = await LiveLogQuery().SingleOrDefaultAsync(block => block.AthleteProfileId == athleteProfileId && block.IsActive, cancellationToken);
-        return log is null ? NotFound() : Ok(ToResponse(log));
+        return log is null ? new NoContentResult() : Ok(ToResponse(log));
     }
 
     private IQueryable<TrainingBlock> LiveLogQuery() => database.TrainingBlocks.AsNoTracking()

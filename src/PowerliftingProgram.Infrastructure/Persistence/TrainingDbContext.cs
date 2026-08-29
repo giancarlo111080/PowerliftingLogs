@@ -8,10 +8,12 @@ public sealed class TrainingDbContext(DbContextOptions<TrainingDbContext> option
 {
     public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
     public DbSet<CoachInvitation> CoachInvitations => Set<CoachInvitation>();
+    public DbSet<CoachingAssignment> CoachingAssignments => Set<CoachingAssignment>();
     public DbSet<ProgramTemplate> ProgramTemplates => Set<ProgramTemplate>();
     public DbSet<ProgramTemplateWeek> ProgramTemplateWeeks => Set<ProgramTemplateWeek>();
     public DbSet<ProgramTemplateDay> ProgramTemplateDays => Set<ProgramTemplateDay>();
     public DbSet<ProgramTemplateExercise> ProgramTemplateExercises => Set<ProgramTemplateExercise>();
+    public DbSet<ExerciseLibraryItem> ExerciseLibraryItems => Set<ExerciseLibraryItem>();
     public DbSet<AthleteProfile> AthleteProfiles => Set<AthleteProfile>();
     public DbSet<TrainingBlock> TrainingBlocks => Set<TrainingBlock>();
     public DbSet<TrainingWeek> TrainingWeeks => Set<TrainingWeek>();
@@ -23,6 +25,12 @@ public sealed class TrainingDbContext(DbContextOptions<TrainingDbContext> option
     public DbSet<SyncCommand> SyncCommands => Set<SyncCommand>();
     public DbSet<AthleteAchievement> AthleteAchievements => Set<AthleteAchievement>();
     public DbSet<PerformanceEvent> PerformanceEvents => Set<PerformanceEvent>();
+    public DbSet<PowerliftingFederation> PowerliftingFederations => Set<PowerliftingFederation>();
+    public DbSet<AthleteFederationMembership> AthleteFederationMemberships => Set<AthleteFederationMembership>();
+    public DbSet<QualificationStandard> QualificationStandards => Set<QualificationStandard>();
+    public DbSet<CompetitionResult> CompetitionResults => Set<CompetitionResult>();
+    public DbSet<AthleteExternalIdentity> AthleteExternalIdentities => Set<AthleteExternalIdentity>();
+    public DbSet<AthleteRankingSnapshot> AthleteRankingSnapshots => Set<AthleteRankingSnapshot>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {

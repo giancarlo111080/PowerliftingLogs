@@ -37,9 +37,10 @@ interface SidebarProps {
 
 function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
   const pathname = usePathname();
-  const { session, currentProfile, activeAthlete, profiles, logout, selectAthlete } = useSession();
+  const { session, currentProfile, activeAthlete, profiles, logout, switchWorkspace, selectAthlete, refreshAthletes } = useSession();
   const { theme, toggleTheme } = useThemePreference();
   const [isAthletePickerOpen, setIsAthletePickerOpen] = useState(false);
+  const [rosterMessage, setRosterMessage] = useState<string | null>(null);
   const mutedIconColor = theme === "dark" ? "#ABB5C8" : "#52607A";
 
   if (!session || !currentProfile) {
@@ -56,6 +57,16 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
   async function chooseAthlete(athleteId: string) {
     await selectAthlete(athleteId);
     setIsAthletePickerOpen(false);
+  }
+
+  async function reloadRoster() {
+    setRosterMessage(null);
+    try {
+      await refreshAthletes();
+    }
+    catch (reason) {
+      setRosterMessage(reason instanceof Error ? reason.message : "Could not load the athlete roster.");
+    }
   }
 
   async function signOut() {
@@ -79,6 +90,8 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
         <Text className="font-mono text-xs uppercase tracking-widest text-zinc">RBAC active</Text>
       </View>
 
+      {session.canCoach && session.canTrain ? <View className="mb-5 flex-row border border-fog bg-canvas p-1"><Pressable className={`min-h-9 flex-1 items-center justify-center px-2 ${session.role === "ATHLETE" ? "bg-ink" : ""}`} onPress={() => void switchWorkspace("ATHLETE")} accessibilityLabel="Open my lifter workspace"><Text className={`font-serif text-xs font-bold ${session.role === "ATHLETE" ? "text-white" : "text-muted"}`}>My training</Text></Pressable><Pressable className={`min-h-9 flex-1 items-center justify-center px-2 ${session.role === "COACH" ? "bg-ink" : ""}`} onPress={() => void switchWorkspace("COACH")} accessibilityLabel="Open coach workspace"><Text className={`font-serif text-xs font-bold ${session.role === "COACH" ? "text-white" : "text-muted"}`}>Coaching</Text></Pressable></View> : null}
+
       {session.role === "COACH" ? (
         <View className="mb-5">
           <Text className="mb-2 px-2 font-serif text-xs font-bold uppercase tracking-widest text-[#8996AC]">Reviewing</Text>
@@ -93,6 +106,10 @@ function Sidebar({ isDrawer = false, onNavigate }: SidebarProps) {
           </Pressable>
           {isAthletePickerOpen ? (
             <View className="border-x border-b border-fog bg-paper py-1">
+              <Pressable className="border-b border-fog px-3 py-2.5 active:bg-canvas" onPress={() => void reloadRoster()} accessibilityLabel="Refresh athletes">
+                <Text className="font-heading text-xs uppercase text-signal">Refresh roster</Text>
+              </Pressable>
+              {rosterMessage ? <Text className="border-b border-fog px-3 py-2.5 font-serif text-xs leading-5 text-signal">{rosterMessage}</Text> : null}
               {coachAthletes.map((athlete) => (
                 <Pressable key={athlete.id} className="px-3 py-2.5 active:bg-canvas" onPress={() => chooseAthlete(athlete.id)}>
                   <Text className="font-serif text-sm font-bold text-ink">{athlete.displayName}</Text>

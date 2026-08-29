@@ -27,6 +27,7 @@ public sealed class AthleteProfileConfiguration : IEntityTypeConfiguration<Athle
         builder.ConfigureEntity();
         builder.Property(profile => profile.ExternalUserId).HasMaxLength(128).IsRequired();
         builder.Property(profile => profile.DisplayName).HasMaxLength(120).IsRequired();
+        builder.Property(profile => profile.CountryCode).HasMaxLength(2);
         builder.Property(profile => profile.CompetitionWeightClass).HasMaxLength(32).IsRequired();
         builder.Property(profile => profile.ActiveBlockTag).HasMaxLength(80);
         builder.Property(profile => profile.UpcomingMeetIdentifier).HasMaxLength(128);
@@ -52,10 +53,27 @@ public sealed class PlatformUserConfiguration : IEntityTypeConfiguration<Platfor
         builder.Property(user => user.DisplayName).HasMaxLength(120).IsRequired();
         builder.Property(user => user.PasswordHash).HasMaxLength(512).IsRequired();
         builder.Property(user => user.PasswordResetTokenHash).HasMaxLength(128);
+        builder.Property(user => user.CanCoach).HasDefaultValue(false);
         builder.HasIndex(user => user.NormalizedEmail).IsUnique();
         builder.HasIndex(user => user.PasswordResetTokenHash).IsUnique();
         builder.HasOne(user => user.Coach).WithMany(coach => coach.Athletes)
             .HasForeignKey(user => user.CoachId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class CoachingAssignmentConfiguration : IEntityTypeConfiguration<CoachingAssignment>
+{
+    public void Configure(EntityTypeBuilder<CoachingAssignment> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(assignment => assignment.MovementScope).HasMaxLength(500);
+        builder.HasIndex(assignment => new { assignment.AthleteUserId, assignment.Status });
+        builder.HasIndex(assignment => new { assignment.CoachId, assignment.Status });
+        builder.HasIndex(assignment => new { assignment.CoachId, assignment.AthleteUserId, assignment.Role, assignment.Status });
+        builder.HasOne(assignment => assignment.Coach).WithMany(coach => coach.CoachAssignments)
+            .HasForeignKey(assignment => assignment.CoachId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(assignment => assignment.AthleteUser).WithMany(athlete => athlete.CoachingAssignments)
+            .HasForeignKey(assignment => assignment.AthleteUserId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -85,6 +103,7 @@ public sealed class CoachInvitationConfiguration : IEntityTypeConfiguration<Coac
         builder.ConfigureEntity();
         builder.Property(invitation => invitation.RecipientEmail).HasMaxLength(320).IsRequired();
         builder.Property(invitation => invitation.TokenHash).HasMaxLength(128).IsRequired();
+        builder.Property(invitation => invitation.MovementScope).HasMaxLength(500);
         builder.HasIndex(invitation => invitation.TokenHash).IsUnique();
         builder.HasIndex(invitation => new { invitation.CoachId, invitation.RecipientEmail });
         builder.HasOne(invitation => invitation.Coach).WithMany(coach => coach.SentInvitations)
@@ -142,6 +161,19 @@ public sealed class ProgramTemplateExerciseConfiguration : IEntityTypeConfigurat
         builder.HasIndex(exercise => new { exercise.ProgramTemplateDayId, exercise.SortOrder }).IsUnique();
         builder.HasOne(exercise => exercise.ProgramTemplateDay).WithMany(day => day.Exercises)
             .HasForeignKey(exercise => exercise.ProgramTemplateDayId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ExerciseLibraryItemConfiguration : IEntityTypeConfiguration<ExerciseLibraryItem>
+{
+    public void Configure(EntityTypeBuilder<ExerciseLibraryItem> builder)
+    {
+        builder.ConfigureEntity();
+        builder.Property(item => item.Name).HasMaxLength(160).IsRequired();
+        builder.HasIndex(item => new { item.BodyPart, item.Name });
+        builder.HasIndex(item => new { item.CoachId, item.Name }).IsUnique();
+        builder.HasOne(item => item.Coach).WithMany(coach => coach.ExerciseLibraryItems)
+            .HasForeignKey(item => item.CoachId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

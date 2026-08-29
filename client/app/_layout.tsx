@@ -8,10 +8,11 @@ import { ThemePreferenceProvider, useThemePreference } from "../src/theme/ThemeP
 
 function ApplicationLayout() {
   const { theme } = useThemePreference();
+  const canvasColor = theme === "dark" ? "#0B1020" : "#F3F5F9";
   return (
     <>
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: canvasColor } }} />
     </>
   );
 }

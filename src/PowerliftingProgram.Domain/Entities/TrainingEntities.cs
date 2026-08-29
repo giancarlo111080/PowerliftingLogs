@@ -79,6 +79,7 @@ public sealed class AthleteProfile : Entity
     public Guid? PlatformUserId { get; set; }
     public required string ExternalUserId { get; set; }
     public required string DisplayName { get; set; }
+    public string? CountryCode { get; set; }
     public AthleteSex Sex { get; set; }
     public decimal BodyWeightKg { get; set; }
     public required string CompetitionWeightClass { get; set; }
@@ -96,6 +97,10 @@ public sealed class AthleteProfile : Entity
     public ICollection<TrainingBlock> TrainingBlocks { get; } = new List<TrainingBlock>();
     public ICollection<CommentThread> CommentThreads { get; } = new List<CommentThread>();
     public ICollection<AthleteAchievement> Achievements { get; } = new List<AthleteAchievement>();
+    public ICollection<AthleteFederationMembership> FederationMemberships { get; } = new List<AthleteFederationMembership>();
+    public ICollection<CompetitionResult> CompetitionResults { get; } = new List<CompetitionResult>();
+    public ICollection<AthleteExternalIdentity> ExternalIdentities { get; } = new List<AthleteExternalIdentity>();
+    public ICollection<AthleteRankingSnapshot> RankingSnapshots { get; } = new List<AthleteRankingSnapshot>();
 }
 
 public sealed class TrainingBlock : Entity

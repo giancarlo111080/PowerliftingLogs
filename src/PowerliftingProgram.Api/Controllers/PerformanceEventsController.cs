@@ -98,7 +98,7 @@ public sealed class PerformanceEventsController(
         CancellationToken cancellationToken)
     {
         var access = await ResolveAccessAsync(athleteProfileId, cancellationToken);
-        if (access is null || !CanAppend(access.Actor.Role, request.Kind))
+        if (access is null || !CanAppend(access.IsCoachContext, request.Kind))
         {
             logger?.LogWarning("Performance event append denied for athlete {AthleteProfileId}, kind {EventKind}", athleteProfileId, request.Kind);
             return Forbid();
@@ -189,7 +189,7 @@ public sealed class PerformanceEventsController(
     public async Task<IActionResult> DeleteEvents(Guid athleteProfileId, CancellationToken cancellationToken)
     {
         var access = await ResolveAccessAsync(athleteProfileId, cancellationToken);
-        if (access is null || access.Actor.Role != PlatformRole.Athlete || access.Actor.AthleteProfile?.Id != athleteProfileId)
+        if (access is null || access.IsCoachContext || access.Actor.AthleteProfile?.Id != athleteProfileId)
         {
             logger?.LogWarning("Performance event deletion denied for athlete {AthleteProfileId}", athleteProfileId);
             return Forbid();
@@ -255,13 +255,13 @@ public sealed class PerformanceEventsController(
         {
             return null;
         }
-        if (actor.Role == PlatformRole.Athlete && actor.AthleteProfile?.Id == athleteProfileId)
+        if (actor.AthleteProfile?.Id == athleteProfileId)
         {
-            return new PerformanceAccess(actor.CoachId ?? actor.Id, actor);
+            return new PerformanceAccess(actor.CoachId ?? actor.Id, actor, false);
         }
-        if (actor.Role == PlatformRole.Coach && await coachAccessService.CoachOwnsAthleteAsync(actor.Id, athleteProfileId, cancellationToken))
+        if (actor.CanCoach && await coachAccessService.CoachOwnsAthleteAsync(actor.Id, athleteProfileId, cancellationToken))
         {
-            return new PerformanceAccess(actor.Id, actor);
+            return new PerformanceAccess(actor.Id, actor, true);
         }
         return null;
     }
@@ -288,16 +288,16 @@ public sealed class PerformanceEventsController(
         }
     }
 
-    private static bool CanAppend(PlatformRole role, PerformanceEventKind kind) => role switch
+    private static bool CanAppend(bool isCoachContext, PerformanceEventKind kind) => isCoachContext switch
     {
-        PlatformRole.Athlete => kind is PerformanceEventKind.RecoveryCheckIn
+        false => kind is PerformanceEventKind.RecoveryCheckIn
             or PerformanceEventKind.TechniqueObservation
             or PerformanceEventKind.CompetitionPlan
             or PerformanceEventKind.CompetitionAttempt
             or PerformanceEventKind.CompetitionResult
             or PerformanceEventKind.ConsentGrant
             or PerformanceEventKind.VideoAnnotation,
-        PlatformRole.Coach => kind is PerformanceEventKind.TechniqueObservation
+        true => kind is PerformanceEventKind.TechniqueObservation
             or PerformanceEventKind.Recommendation
             or PerformanceEventKind.CoachDecision
             or PerformanceEventKind.ProgramVersion
@@ -308,8 +308,7 @@ public sealed class PerformanceEventsController(
             or PerformanceEventKind.VideoAnnotation
             or PerformanceEventKind.AthleteGroup
             or PerformanceEventKind.ExerciseLibraryItem
-            or PerformanceEventKind.ExceptionDisposition,
-        _ => false
+            or PerformanceEventKind.ExceptionDisposition
     };
 
     private static PerformanceEventResponse ToResponse(PerformanceEvent performanceEvent)
@@ -331,7 +330,7 @@ public sealed class PerformanceEventsController(
             performanceEvent.CreatedAt);
     }
 
-    private sealed record PerformanceAccess(Guid TenantId, PlatformUser Actor);
+    private sealed record PerformanceAccess(Guid TenantId, PlatformUser Actor, bool IsCoachContext);
 
     private sealed class TenantDatabaseScope(TrainingDbContext database) : IAsyncDisposable
     {

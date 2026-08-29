@@ -247,9 +247,12 @@ public sealed class ProgramTemplatesController(
             return BadRequest(new ProblemDetails { Title = $"A live training day needs a valid name, focus, and 1-{MaxExercisesPerDay} unique exercises." });
         }
 
+        var updatedAt = DateTimeOffset.UtcNow;
         day.Name = update.Name.Trim();
         day.Focus = update.Focus.Trim();
         day.ScheduledFor = update.ScheduledFor;
+        day.UpdatedAt = updatedAt;
+        day.TrainingWeek.TrainingBlock.UpdatedAt = updatedAt;
         var athlete = day.TrainingWeek.TrainingBlock.AthleteProfile;
         if (athlete is null)
         {
@@ -271,7 +274,7 @@ public sealed class ProgramTemplatesController(
             exercise.PrescriptionValue = input.PrescriptionValue;
             exercise.WeightUnit = input.WeightUnit;
             exercise.TargetEstimatedOneRepMaxKg = ResolveOneRepMax(athlete, input.ExerciseType);
-            exercise.UpdatedAt = DateTimeOffset.UtcNow;
+            exercise.UpdatedAt = updatedAt;
             AdjustLiveSets(exercise, input.Sets, input.Repetitions, input.PrescriptionMode, input.PrescriptionValue, input.WeightUnit, athlete);
         }
         await database.SaveChangesAsync(cancellationToken);
@@ -317,7 +320,7 @@ public sealed class ProgramTemplatesController(
         if (input.Weeks.Count is 0 or > MaxTemplateWeeks) ModelState.AddModelError(nameof(input.Weeks), $"A template needs between 1 and {MaxTemplateWeeks} weeks.");
         if (input.Weeks.GroupBy(week => week.WeekNumber).Any(group => group.Key is < 1 or > MaxTemplateWeeks || group.Count() != 1)) ModelState.AddModelError(nameof(input.Weeks), $"Week numbers must be unique and between 1 and {MaxTemplateWeeks}.");
         if (input.Weeks.Any(week => string.IsNullOrWhiteSpace(week.Name) || week.Name.Trim().Length > 120 || week.Days.Count is 0 or > MaxDaysPerWeek)) ModelState.AddModelError(nameof(input.Weeks), $"Every week needs a name of at most 120 characters and between 1 and {MaxDaysPerWeek} days.");
-        if (input.Weeks.SelectMany(week => week.Days).Any(day => day.DayNumber is < 1 or > 7 || string.IsNullOrWhiteSpace(day.Name) || day.Name.Trim().Length > 160 || string.IsNullOrWhiteSpace(day.Focus) || day.Focus.Trim().Length > 160 || day.Exercises.Count is 0 or > MaxExercisesPerDay)) ModelState.AddModelError(nameof(input.Weeks), $"Every day needs a valid position, name, focus, and 1-{MaxExercisesPerDay} exercises.");
+        if (input.Weeks.SelectMany(week => week.Days).Any(day => day.DayNumber is < 1 or > 7 || string.IsNullOrWhiteSpace(day.Name) || day.Name.Trim().Length > 160 || day.Focus?.Trim().Length > 160 || day.Exercises.Count > MaxExercisesPerDay)) ModelState.AddModelError(nameof(input.Weeks), $"Every day needs a valid position and name; focus is optional and exercises can be added later, up to {MaxExercisesPerDay}.");
         if (input.Weeks.Any(week => week.Days.GroupBy(day => day.DayNumber).Any(group => group.Count() != 1))) ModelState.AddModelError(nameof(input.Weeks), "Day numbers must be unique within each week.");
         var exercises = input.Weeks.SelectMany(week => week.Days).SelectMany(day => day.Exercises).ToList();
         if (input.Weeks.SelectMany(week => week.Days).Any(day => day.Exercises.GroupBy(exercise => exercise.SortOrder).Any(group => group.Key < 0 || group.Count() != 1))) ModelState.AddModelError(nameof(input.Weeks), "Exercise positions must be unique non-negative values within each day.");

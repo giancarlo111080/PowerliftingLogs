@@ -152,7 +152,7 @@ function CoachDashboard() {
     try {
       const invitation = await createAthleteInvitation(session.accessToken, inviteEmail.trim());
       setInviteEmail("");
-      setInviteLink(invitation.registrationUrl);
+      setInviteLink(invitation.acceptanceUrl);
       setInviteMessage(invitation.emailSent
         ? `Invitation emailed to ${invitation.recipientEmail}. The share link expires ${new Date(invitation.expiresAt).toLocaleString()}.`
         : `Email was not delivered. Share the registration link below before ${new Date(invitation.expiresAt).toLocaleString()}.`);

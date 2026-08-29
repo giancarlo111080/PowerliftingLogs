@@ -123,6 +123,22 @@ builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
+var resendApiKeyConfigured = !string.IsNullOrWhiteSpace(app.Configuration["Email:Resend:ApiKey"]);
+var resendSender = app.Configuration["Email:Resend:From"];
+var exposesPasswordResetLinks = app.Configuration.GetValue<bool>("Authentication:ExposePasswordResetLink");
+if (!resendApiKeyConfigured)
+{
+    app.Logger.LogWarning("Resend email delivery is disabled because Email:Resend:ApiKey is not configured.");
+}
+else
+{
+    app.Logger.LogInformation("Resend email delivery is configured with sender {ResendSender}.", resendSender);
+}
+if (exposesPasswordResetLinks)
+{
+    app.Logger.LogWarning("Password reset emails are bypassed because Authentication:ExposePasswordResetLink is enabled.");
+}
+
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var database = scope.ServiceProvider.GetRequiredService<TrainingDbContext>();

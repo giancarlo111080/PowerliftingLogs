@@ -10,14 +10,14 @@ using PowerliftingProgram.Infrastructure.Services;
 
 namespace PowerliftingProgram.Api.Controllers;
 
-public sealed record RegisterRequest(string DisplayName, string Email, string Password, PlatformRole Role, string? InvitationToken);
-public sealed record LoginRequest(string Email, string Password);
+public sealed record RegisterRequest(string DisplayName, string Email, string Password, string CountryCode, PlatformRole Role, string? InvitationToken);
+public sealed record LoginRequest(string Email, string Password, string? InvitationToken = null);
 public sealed record RequestPasswordResetRequest(string Email);
 public sealed record CompletePasswordResetRequest(string Token, string Password);
 public sealed record PasswordResetRequestedResponse(string Message, string? ResetUrl = null);
-public sealed record AccountResponse(Guid Id, string DisplayName, string Email, PlatformRole Role, Guid? CoachId, Guid? AthleteProfileId);
+public sealed record AccountResponse(Guid Id, string DisplayName, string Email, string? CountryCode, PlatformRole Role, bool CanCoach, bool CanTrain, Guid? CoachId, string? CoachName, Guid? AthleteProfileId);
 public sealed record SessionResponse(string AccessToken, AccountResponse Account);
-public sealed record InvitationContextResponse(string CoachName, string RecipientEmail, DateTimeOffset ExpiresAt);
+public sealed record InvitationContextResponse(string CoachName, string RecipientEmail, DateTimeOffset ExpiresAt, bool ExistingAccount, CoachingRole Role, CoachingAccessLevel AccessLevel, bool IsPrimary);
 
 [ApiController]
 [Route("api/auth")]
@@ -64,11 +64,6 @@ public sealed class AuthenticationController(
             {
                 ModelState.AddModelError(nameof(request.Email), "Register with the email address that received this invitation.");
             }
-            else if (request.Role != PlatformRole.Athlete)
-            {
-                ModelState.AddModelError(nameof(request.Role), "Coach invitations can only create athlete accounts.");
-            }
-
             if (!ModelState.IsValid)
             {
                 return ValidationProblem(ModelState);
@@ -82,32 +77,34 @@ public sealed class AuthenticationController(
             DisplayName = request.DisplayName.Trim(),
             PasswordHash = passwordHashingService.Hash(request.Password),
             Role = invitation is null ? request.Role : PlatformRole.Athlete,
+            CanCoach = request.Role == PlatformRole.Coach,
             CoachId = invitation?.CoachId
         };
         database.PlatformUsers.Add(user);
 
-        AthleteProfile? athleteProfile = null;
-        if (user.Role == PlatformRole.Athlete)
+        var athleteProfile = new AthleteProfile
         {
-            athleteProfile = new AthleteProfile
-            {
-                PlatformUserId = user.Id,
-                ExternalUserId = $"platform-{user.Id}",
-                DisplayName = user.DisplayName,
-                Sex = AthleteSex.PreferNotToSay,
-                CompetitionWeightClass = "Unspecified"
-            };
-            database.AthleteProfiles.Add(athleteProfile);
-        }
+            PlatformUserId = user.Id,
+            ExternalUserId = $"platform-{user.Id}",
+            DisplayName = user.DisplayName,
+            CountryCode = request.CountryCode.Trim().ToUpperInvariant(),
+            Sex = AthleteSex.PreferNotToSay,
+            CompetitionWeightClass = "Unspecified"
+        };
+        user.AthleteProfile = athleteProfile;
+        database.AthleteProfiles.Add(athleteProfile);
 
         if (invitation is not null)
         {
+            database.CoachingAssignments.Add(CreateAssignment(invitation, user.Id));
+            user.Coach = invitation.Coach;
             invitation.AcceptedAt = DateTimeOffset.UtcNow;
             invitation.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
         await database.SaveChangesAsync(cancellationToken);
-        var account = ToAccountResponse(user, athleteProfile?.Id);
+        var account = ToAccountResponse(user, athleteProfile?.Id,
+            user.Role == PlatformRole.Athlete || invitation?.AccessLevel >= CoachingAccessLevel.Program);
         return CreatedAtAction(nameof(Me), new SessionResponse(jwtTokenService.Create(user), account));
     }
 
@@ -133,14 +130,53 @@ public sealed class AuthenticationController(
         }
 
         var normalizedEmail = NormalizeEmail(request.Email);
-        var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile)
+        var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile).Include(candidate => candidate.Coach)
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, cancellationToken);
         if (user is null || !passwordHashingService.Verify(request.Password, user.PasswordHash))
         {
             return Unauthorized(new ProblemDetails { Title = "Email or password is incorrect." });
         }
 
-        return Ok(new SessionResponse(jwtTokenService.Create(user), ToAccountResponse(user, user.AthleteProfile?.Id)));
+        if (!string.IsNullOrWhiteSpace(request.InvitationToken))
+        {
+            var invitation = await database.CoachInvitations.Include(item => item.Coach)
+                .SingleOrDefaultAsync(item => item.TokenHash == HashToken(request.InvitationToken), cancellationToken);
+            if (invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt <= DateTimeOffset.UtcNow ||
+                !string.Equals(invitation.RecipientEmail, user.NormalizedEmail, StringComparison.OrdinalIgnoreCase))
+            {
+                ModelState.AddModelError(nameof(request.InvitationToken), "This coach invitation is invalid or has expired.");
+                return ValidationProblem(ModelState);
+            }
+            if (invitation.CoachId == user.Id)
+            {
+                ModelState.AddModelError(nameof(request.InvitationToken), "An account cannot coach itself.");
+                return ValidationProblem(ModelState);
+            }
+            var changedAt = DateTimeOffset.UtcNow;
+            var currentPrimaryAssignments = await database.CoachingAssignments
+                .Where(assignment => assignment.AthleteUserId == user.Id &&
+                    assignment.Role == invitation.Role && invitation.IsPrimary && assignment.IsPrimary &&
+                    assignment.Status == CoachingAssignmentStatus.Active)
+                .ToListAsync(cancellationToken);
+            foreach (var assignment in currentPrimaryAssignments)
+            {
+                assignment.Status = CoachingAssignmentStatus.Completed;
+                assignment.EndsAt = changedAt;
+                assignment.UpdatedAt = changedAt;
+            }
+            database.CoachingAssignments.Add(CreateAssignment(invitation, user.Id, changedAt));
+            if (invitation.Role == CoachingRole.Strength && invitation.IsPrimary)
+            {
+                user.CoachId = invitation.CoachId;
+                user.Coach = invitation.Coach;
+            }
+            user.UpdatedAt = changedAt;
+            invitation.AcceptedAt = changedAt;
+            invitation.UpdatedAt = changedAt;
+            await database.SaveChangesAsync(cancellationToken);
+        }
+
+        return Ok(new SessionResponse(jwtTokenService.Create(user), ToAccountResponse(user, user.AthleteProfile?.Id, await CanTrainAsync(user, cancellationToken))));
     }
 
     [AllowAnonymous]
@@ -250,9 +286,46 @@ public sealed class AuthenticationController(
             return Unauthorized();
         }
 
+        var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile).Include(candidate => candidate.Coach)
+            .SingleOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
+        return user is null ? Unauthorized() : Ok(ToAccountResponse(user, user.AthleteProfile?.Id, await CanTrainAsync(user, cancellationToken)));
+    }
+
+    [Authorize]
+    [HttpDelete("coach")]
+    [ProducesResponseType(typeof(AccountResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AccountResponse>> LeaveCoach(CancellationToken cancellationToken)
+    {
+        var userId = CoachAccessService.CurrentUserId(User);
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
         var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile)
             .SingleOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
-        return user is null ? Unauthorized() : Ok(ToAccountResponse(user, user.AthleteProfile?.Id));
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        var changedAt = DateTimeOffset.UtcNow;
+        var activePrimaryAssignments = await database.CoachingAssignments
+            .Where(assignment => assignment.AthleteUserId == user.Id && assignment.CoachId == user.CoachId &&
+                assignment.Role == CoachingRole.Strength && assignment.IsPrimary &&
+                assignment.Status == CoachingAssignmentStatus.Active)
+            .ToListAsync(cancellationToken);
+        foreach (var assignment in activePrimaryAssignments)
+        {
+            assignment.Status = CoachingAssignmentStatus.Revoked;
+            assignment.EndsAt = changedAt;
+            assignment.UpdatedAt = changedAt;
+        }
+        user.CoachId = null;
+        user.UpdatedAt = changedAt;
+        await database.SaveChangesAsync(cancellationToken);
+        return Ok(ToAccountResponse(user, user.AthleteProfile?.Id, await CanTrainAsync(user, cancellationToken)));
     }
 
     [AllowAnonymous]
@@ -268,7 +341,48 @@ public sealed class AuthenticationController(
             return NotFound();
         }
 
-        return Ok(new InvitationContextResponse(invitation.Coach.DisplayName, invitation.RecipientEmail, invitation.ExpiresAt));
+        var normalizedRecipientEmail = NormalizeEmail(invitation.RecipientEmail);
+        var existingAccount = await database.PlatformUsers.AsNoTracking()
+            .AnyAsync(user => user.NormalizedEmail == normalizedRecipientEmail
+                || user.Email.ToUpper() == normalizedRecipientEmail, cancellationToken);
+        return Ok(new InvitationContextResponse(
+            invitation.Coach.DisplayName,
+            invitation.RecipientEmail,
+            invitation.ExpiresAt,
+            existingAccount,
+            invitation.Role,
+            invitation.AccessLevel,
+            invitation.IsPrimary));
+    }
+
+    [Authorize]
+    [HttpPost("invitations/{token}/accept")]
+    [ProducesResponseType(typeof(AccountResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AccountResponse>> AcceptInvitation(string token, CancellationToken cancellationToken)
+    {
+        var userId = CoachAccessService.CurrentUserId(User);
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
+        var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile).Include(candidate => candidate.Coach)
+            .SingleOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        var error = await ApplyInvitationAsync(user, token, cancellationToken);
+        if (error is not null)
+        {
+            ModelState.AddModelError(nameof(token), error);
+            return ValidationProblem(ModelState);
+        }
+
+        return Ok(ToAccountResponse(user, user.AthleteProfile?.Id, await CanTrainAsync(user, cancellationToken)));
     }
 
     private void ValidateRegistrationRequest(RegisterRequest request)
@@ -289,6 +403,11 @@ public sealed class AuthenticationController(
         {
             ModelState.AddModelError(nameof(request.Password), "Password must contain at most 128 characters.");
         }
+        var countryCode = request.CountryCode?.Trim();
+        if (countryCode is null || countryCode.Length != 2 || !countryCode.All(char.IsLetter))
+        {
+            ModelState.AddModelError(nameof(request.CountryCode), "Country code must be a two-letter ISO 3166-1 alpha-2 code.");
+        }
         if (!Enum.IsDefined(request.Role))
         {
             ModelState.AddModelError(nameof(request.Role), "Select a valid account role.");
@@ -301,8 +420,75 @@ public sealed class AuthenticationController(
 
     private static string NormalizeEmail(string email) => email.Trim().ToUpperInvariant();
 
+    private async Task<string?> ApplyInvitationAsync(PlatformUser user, string token, CancellationToken cancellationToken)
+    {
+        var invitation = await database.CoachInvitations.Include(item => item.Coach)
+            .SingleOrDefaultAsync(item => item.TokenHash == HashToken(token), cancellationToken);
+        if (invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt <= DateTimeOffset.UtcNow ||
+            !string.Equals(NormalizeEmail(invitation.RecipientEmail), NormalizeEmail(user.Email), StringComparison.Ordinal))
+        {
+            return "This coach invitation is invalid or has expired.";
+        }
+        if (invitation.CoachId == user.Id)
+        {
+            return "An account cannot coach itself.";
+        }
+
+        var changedAt = DateTimeOffset.UtcNow;
+        var currentPrimaryAssignments = await database.CoachingAssignments
+            .Where(assignment => assignment.AthleteUserId == user.Id &&
+                assignment.Role == invitation.Role && invitation.IsPrimary && assignment.IsPrimary &&
+                assignment.Status == CoachingAssignmentStatus.Active)
+            .ToListAsync(cancellationToken);
+        foreach (var assignment in currentPrimaryAssignments)
+        {
+            assignment.Status = CoachingAssignmentStatus.Completed;
+            assignment.EndsAt = changedAt;
+            assignment.UpdatedAt = changedAt;
+        }
+        database.CoachingAssignments.Add(CreateAssignment(invitation, user.Id, changedAt));
+        if (invitation.Role == CoachingRole.Strength && invitation.IsPrimary)
+        {
+            user.CoachId = invitation.CoachId;
+            user.Coach = invitation.Coach;
+        }
+        user.UpdatedAt = changedAt;
+        invitation.AcceptedAt = changedAt;
+        invitation.UpdatedAt = changedAt;
+        await database.SaveChangesAsync(cancellationToken);
+        return null;
+    }
+
+    private static CoachingAssignment CreateAssignment(CoachInvitation invitation, Guid athleteUserId, DateTimeOffset? startsAt = null) => new()
+    {
+        CoachId = invitation.CoachId,
+        AthleteUserId = athleteUserId,
+        Role = invitation.Role,
+        AccessLevel = invitation.AccessLevel,
+        Status = CoachingAssignmentStatus.Active,
+        IsPrimary = invitation.IsPrimary,
+        StartsAt = startsAt ?? DateTimeOffset.UtcNow,
+        EndsAt = invitation.AssignmentEndsAt,
+        MovementScope = invitation.MovementScope
+    };
+
     internal static string HashToken(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
-    private static AccountResponse ToAccountResponse(PlatformUser user, Guid? athleteProfileId) =>
-        new(user.Id, user.DisplayName, user.Email, user.Role, user.CoachId, athleteProfileId);
+    private async Task<bool> CanTrainAsync(PlatformUser user, CancellationToken cancellationToken)
+    {
+        if (user.Role == PlatformRole.Athlete)
+        {
+            return true;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        return await database.CoachingAssignments.AsNoTracking().AnyAsync(assignment =>
+            assignment.AthleteUserId == user.Id &&
+            assignment.Status == CoachingAssignmentStatus.Active &&
+            assignment.AccessLevel >= CoachingAccessLevel.Program &&
+            (assignment.EndsAt == null || assignment.EndsAt > now), cancellationToken);
+    }
+
+    private static AccountResponse ToAccountResponse(PlatformUser user, Guid? athleteProfileId, bool canTrain) =>
+        new(user.Id, user.DisplayName, user.Email, user.AthleteProfile?.CountryCode, user.Role, user.CanCoach, canTrain, user.CoachId, user.Coach?.DisplayName, athleteProfileId);
 }

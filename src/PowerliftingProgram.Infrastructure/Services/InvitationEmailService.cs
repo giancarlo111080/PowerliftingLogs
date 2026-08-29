@@ -23,7 +23,7 @@ public sealed class ResendInvitationEmailService(
             return false;
         }
 
-        var sender = configuration["Email:Resend:From"] ?? "Iron Forge <invites@example.com>";
+        var sender = configuration["Email:Resend:From"] ?? "Iron Forge <onboarding@resend.dev>";
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
         {
             Content = JsonContent.Create(new
@@ -31,7 +31,7 @@ public sealed class ResendInvitationEmailService(
                 from = sender,
                 to = new[] { recipientEmail },
                 subject = "Your Coach has invited you to Iron Forge",
-                html = $"<h1>Iron Forge</h1><p>{System.Net.WebUtility.HtmlEncode(coachName)} has invited you to train under their coaching roster.</p><p><a href=\"{System.Net.WebUtility.HtmlEncode(registrationUrl)}\">Create your athlete account</a></p><p>This invitation expires in 48 hours.</p>"
+                html = IronForgeEmailTemplates.Invitation(coachName, registrationUrl)
             })
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
@@ -43,7 +43,12 @@ public sealed class ResendInvitationEmailService(
                 return true;
             }
 
-            logger.LogError("Invitation email delivery failed with status {StatusCode} for {RecipientEmail}.", response.StatusCode, recipientEmail);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger.LogError(
+                "Invitation email delivery failed with status {StatusCode} for {RecipientEmail}. Resend response: {ResponseBody}",
+                response.StatusCode,
+                recipientEmail,
+                responseBody);
         }
         catch (HttpRequestException exception)
         {
@@ -73,7 +78,7 @@ public sealed class ResendPasswordResetEmailService(
             return;
         }
 
-        var sender = configuration["Email:Resend:From"] ?? "Iron Forge <invites@example.com>";
+        var sender = configuration["Email:Resend:From"] ?? "Iron Forge <onboarding@resend.dev>";
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
         {
             Content = JsonContent.Create(new
@@ -81,7 +86,7 @@ public sealed class ResendPasswordResetEmailService(
                 from = sender,
                 to = new[] { recipientEmail },
                 subject = "Reset your Iron Forge password",
-                html = $"<h1>Iron Forge</h1><p>Hello {System.Net.WebUtility.HtmlEncode(displayName)},</p><p><a href=\"{System.Net.WebUtility.HtmlEncode(resetUrl)}\">Reset your password</a></p><p>This link expires in one hour and can be used once. If you did not request it, no action is needed.</p>"
+                html = IronForgeEmailTemplates.PasswordReset(displayName, resetUrl)
             })
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
@@ -90,7 +95,12 @@ public sealed class ResendPasswordResetEmailService(
             using var response = await httpClientFactory.CreateClient(nameof(ResendPasswordResetEmailService)).SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogError("Password reset email delivery failed with status {StatusCode} for {RecipientEmail}.", response.StatusCode, recipientEmail);
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                logger.LogError(
+                    "Password reset email delivery failed with status {StatusCode} for {RecipientEmail}. Resend response: {ResponseBody}",
+                    response.StatusCode,
+                    recipientEmail,
+                    responseBody);
             }
         }
         catch (HttpRequestException exception)

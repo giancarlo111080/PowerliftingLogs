@@ -16,6 +16,7 @@ export interface WeeklyProgramAnalytics {
   highRpeSets: number;
   failedSets: number;
   painLimitedSets: number;
+  
   fatigueScore: number;
   readinessScore: number;
 }

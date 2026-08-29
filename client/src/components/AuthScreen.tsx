@@ -5,6 +5,7 @@ import { router } from "expo-router";
 
 import { completePasswordReset, getInvitationContext, isStaticDemo, PlatformApiError, requestPasswordReset, staticDemoCredentials, type PlatformRole } from "../lib/platformApi";
 import { useSession } from "../auth/AuthSessionContext";
+import { CountryPickerField } from "./CountryPickerField";
 
 type AuthMode = "sign-in" | "register" | "forgot-password" | "reset-password";
 
@@ -17,9 +18,10 @@ interface AuthScreenProps {
 export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToken }: AuthScreenProps) {
   const { login, register } = useSession();
   const staticRegistrationRequested = isStaticDemo && (Boolean(invitationToken) || initialMode === "register");
-  const [mode, setMode] = useState<AuthMode>(isStaticDemo ? "sign-in" : resetToken ? "reset-password" : invitationToken ? "register" : initialMode);
+  const [mode, setMode] = useState<AuthMode>(isStaticDemo ? "sign-in" : resetToken ? "reset-password" : invitationToken ? "sign-in" : initialMode);
   const [role, setRole] = useState<PlatformRole>(invitationToken ? "ATHLETE" : "ATHLETE");
   const [displayName, setDisplayName] = useState("");
+  const [countryCode, setCountryCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -38,7 +40,11 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
       .then((invitation) => {
         if (isMounted) {
           setEmail(invitation.recipientEmail.toLowerCase());
-          setInviteMessage(`${invitation.coachName} has reserved an athlete place for you.`);
+          setMode(invitation.existingAccount ? "sign-in" : "register");
+          const assignmentLabel = `${invitation.isPrimary ? "primary " : ""}${invitation.role} coaching`;
+          setInviteMessage(invitation.existingAccount
+            ? `${invitation.coachName} invited your existing account to accept ${assignmentLabel}. Sign in to accept.`
+            : `${invitation.coachName} invited you to create an account and accept ${assignmentLabel}.`);
         }
       })
       .catch(() => {
@@ -114,6 +120,10 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
       setMessage("Enter the name your coach should see.");
       return;
     }
+    if (mode === "register" && !countryCode) {
+      setMessage("Select your country.");
+      return;
+    }
     if (mode === "register" && password.length < 12) {
       setMessage("Use at least 12 characters for your password.");
       return;
@@ -126,10 +136,10 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
     setIsSubmitting(true);
     try {
       if (mode === "register") {
-        await register({ displayName: displayName.trim(), email: email.trim(), password, role, invitationToken });
+        await register({ displayName: displayName.trim(), email: email.trim(), password, countryCode: countryCode.trim().toUpperCase(), role, invitationToken });
       }
       else {
-        await login(email.trim(), password);
+        await login(email.trim(), password, invitationToken);
       }
       router.replace("/dashboard");
     }
@@ -190,6 +200,7 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
 
           <View className="mt-5 gap-4">
             {isRegistering ? <Field label="Display name" value={displayName} onChangeText={setDisplayName} placeholder="How your coach will know you" /> : null}
+            {isRegistering ? <CountryPickerField value={countryCode} onChange={setCountryCode} /> : null}
             {!isResettingPassword ? <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" editable={!Boolean(invitationToken)} /> : null}
             {!isForgotPassword ? <Field label={isResettingPassword ? "New password" : "Password"} value={password} onChangeText={setPassword} placeholder="At least 12 characters" secureTextEntry /> : null}
             {isRegistering || isResettingPassword ? <Field label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Repeat your password" secureTextEntry /> : null}
