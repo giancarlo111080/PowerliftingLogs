@@ -345,11 +345,13 @@ export function TrainingLogScreen() {
   function selectProgram(program: TrainingProgram) {
     setSelectedProgramId(program.id);
     setSelectedDayId(null);
+    setCollapsedExerciseIds({});
     setMessage(null);
   }
 
   function selectDay(dayId: string) {
     setSelectedDayId(dayId);
+    setCollapsedExerciseIds({});
     setMessage(null);
   }
 
