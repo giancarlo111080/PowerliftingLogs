@@ -502,8 +502,8 @@ function mapRemoteTrainingProgram(remote: LiveTrainingLogResponse): TrainingProg
       weekNumber: week.weekNumber,
       name: `Week ${week.weekNumber}`,
       days: week.days.map((day, dayIndex) => ({
-        id: day.id,
-        sequence: dayIndex + 1,
+        id: ("id" in day && typeof day.id === "string") ? day.id : createId("day"),
+        sequence: ("dayNumber" in day && typeof day.dayNumber === "number" && Number.isInteger(day.dayNumber) && day.dayNumber > 0) ? day.dayNumber : dayIndex + 1,
         name: day.name,
         focus: day.focus,
         scheduledDate: day.scheduledFor,
@@ -512,7 +512,7 @@ function mapRemoteTrainingProgram(remote: LiveTrainingLogResponse): TrainingProg
         exercises: day.exercises.map((exercise) => {
           const orderedSets = [...exercise.sets].sort((left, right) => left.setNumber - right.setNumber);
           return {
-            id: exercise.id,
+            id: ("id" in exercise && typeof exercise.id === "string") ? exercise.id : createId("exercise"),
             category: mapExerciseCategory(exercise.exerciseType),
             name: exercise.name,
             sets: orderedSets.length,
