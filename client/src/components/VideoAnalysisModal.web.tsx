@@ -62,6 +62,7 @@ export function VideoAnalysisModal({ visible, targets, onClose, onSave }: VideoA
 
   function selectFile(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0] ?? null;
+    event.target.value = "";
     setSelectedFile(nextFile);
     setResult(null);
     setMessage(null);
@@ -85,6 +86,7 @@ export function VideoAnalysisModal({ visible, targets, onClose, onSave }: VideoA
         onProgress: (completed, total) => setProgress({ completed, total })
       });
       setResult(analysis);
+      setSelectedFile(null);
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "Could not analyze this video.");
     } finally {

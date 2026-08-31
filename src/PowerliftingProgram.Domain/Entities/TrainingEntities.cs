@@ -17,6 +17,18 @@ public enum AthleteSex
     PreferNotToSay = 3
 }
 
+public enum PowerliftingExperience
+{
+    Novice = 0,
+    Experienced = 1
+}
+
+public enum PowerliftingEquipment
+{
+    Classic = 0,
+    Equipped = 1
+}
+
 public enum ExerciseType
 {
     Squat = 0,
@@ -33,6 +45,14 @@ public enum SetIntent
     Working = 1,
     BackOff = 2,
     Accessory = 3
+}
+
+public enum TrainingBlockStatus
+{
+    Pending = 0,
+    Accepted = 1,
+    Declined = 2,
+    Completed = 3
 }
 
 public enum SetCompletionStatus
@@ -81,6 +101,11 @@ public sealed class AthleteProfile : Entity
     public required string DisplayName { get; set; }
     public string? CountryCode { get; set; }
     public AthleteSex Sex { get; set; }
+    public DateOnly? DateOfBirth { get; set; }
+    public PowerliftingExperience Experience { get; set; }
+    public PowerliftingEquipment Equipment { get; set; }
+    public string FederationCode { get; set; } = "IPF";
+    public string CompetitionAgeDivision { get; set; } = "Open";
     public decimal BodyWeightKg { get; set; }
     public required string CompetitionWeightClass { get; set; }
     public decimal SquatOneRepMaxKg { get; set; }
@@ -113,6 +138,8 @@ public sealed class TrainingBlock : Entity
     public DateOnly StartsOn { get; set; }
     public DateOnly EndsOn { get; set; }
     public bool IsActive { get; set; }
+    public TrainingBlockStatus Status { get; set; } = TrainingBlockStatus.Accepted;
+    public DateTimeOffset? RespondedAt { get; set; }
 
     public AthleteProfile? AthleteProfile { get; set; }
     public PlatformUser? Coach { get; set; }

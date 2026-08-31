@@ -3,7 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { useSession } from "../auth/AuthSessionContext";
 import { isLiftVideoAnalysis, type LiftVideoAnalysis } from "../lib/liftAnalysis";
-import { getAthleteLiveTrainingLog, getCurrentLiveTrainingLog, isStaticDemo, PlatformApiError, synchronizeLoggedSet, updateLiveTrainingDay, type LiveSetOutcomeReason, type LiveTrainingLogResponse, type LoggedSetRequest } from "../lib/platformApi";
+import { activateTrainingBlock, assignProgramTemplate, createProgramTemplate, deleteProgramTemplate, duplicateLiveTrainingDay, duplicateLiveTrainingWeek, getAthleteLiveTrainingLog, getCurrentLiveTrainingLog, getProgramTemplates, isStaticDemo, PlatformApiError, removeLiveTrainingBlock, replaceProgramTemplate, shareProgramTemplate, synchronizeLoggedSet, updateLiveTrainingDay, type LiveSetOutcomeReason, type LiveTrainingLogResponse, type LoggedSetRequest, type ProgramAssignmentResponse, type ProgramTemplateRequest, type ProgramTemplateResponse } from "../lib/platformApi";
 
 export type ProgramPhase = "Hypertrophy" | "Strength" | "Peak" | "Recovery";
 export type ProgramStatus = "draft" | "active" | "completed";
@@ -135,6 +135,7 @@ export interface ProgramTemplate {
 }
 
 export type ProgramTemplateInput = Pick<ProgramTemplate, "name" | "phase" | "goal" | "trainingDaysPerWeek">;
+export type ProgramAssignmentResult = Pick<ProgramAssignmentResponse, "id" | "name" | "status">;
 
 interface ProgramWorkspaceStore {
   programs: TrainingProgram[];
@@ -142,6 +143,11 @@ interface ProgramWorkspaceStore {
   comments: ProgramComment[];
   dayLogs: ProgramDayLog[];
   isLoading: boolean;
+  pendingTrainingSyncCount: number;
+  isTrainingSyncing: boolean;
+  trainingSyncError: string | null;
+  lastTrainingSyncedAt: string | null;
+  retryTrainingSync: () => Promise<void>;
   createProgram: (athleteId: string, input: ProgramInput) => Promise<void>;
   updateProgram: (programId: string, input: ProgramInput) => Promise<void>;
   restoreProgramSnapshot: (programId: string, snapshot: TrainingProgram, expectedUpdatedAt: string) => Promise<TrainingProgram>;
@@ -149,21 +155,28 @@ interface ProgramWorkspaceStore {
   createTemplate: (coachId: string, input: ProgramTemplateInput) => Promise<ProgramTemplate>;
   updateTemplate: (templateId: string, input: ProgramTemplateInput) => Promise<void>;
   deleteTemplate: (templateId: string) => Promise<void>;
+  shareTemplate: (templateId: string, recipientEmail: string) => Promise<void>;
   addTemplateWeek: (templateId: string) => Promise<void>;
+  duplicateTemplateWeek: (templateId: string, weekId: string) => Promise<void>;
   deleteTemplateWeek: (templateId: string, weekId: string) => Promise<void>;
   deleteTemplateDay: (templateId: string, weekId: string, dayId: string) => Promise<void>;
   ensureTemplateDays: (templateId: string, daysPerWeek: number) => Promise<void>;
   updateTemplateWeek: (templateId: string, weekId: string, name: string) => Promise<void>;
   addTemplateDay: (templateId: string, weekId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<ProgramTemplateDay>;
+  duplicateTemplateDay: (templateId: string, weekId: string, dayId: string) => Promise<void>;
   updateTemplateDay: (templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) => Promise<void>;
   addTemplateExercise: (templateId: string, weekId: string, dayId: string, category: ExerciseCategory, input?: Partial<Pick<ProgramExercise, "name" | "sets" | "repetitions" | "prescriptionMode" | "prescriptionValue" | "weightUnit">>) => Promise<ProgramExercise>;
   updateTemplateExercise: (templateId: string, weekId: string, dayId: string, exercise: ProgramExercise) => Promise<void>;
   deleteTemplateExercise: (templateId: string, weekId: string, dayId: string, exerciseId: string) => Promise<void>;
-  assignTemplate: (templateId: string, athleteId: string, startDate: string) => Promise<TrainingProgram>;
+  assignTemplate: (templateId: string, athleteId: string, startDate: string) => Promise<ProgramAssignmentResult>;
+  applyAcceptedTrainingLog: (trainingLog: LiveTrainingLogResponse) => Promise<void>;
+  activateProgram: (programId: string) => Promise<void>;
   addWeek: (programId: string) => Promise<void>;
+  duplicateWeek: (programId: string, weekId: string) => Promise<void>;
   updateWeek: (programId: string, weekId: string, name: string) => Promise<void>;
   deleteWeek: (programId: string, weekId: string) => Promise<void>;
   addDay: (programId: string, weekId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) => Promise<ProgramDay>;
+  duplicateDay: (programId: string, weekId: string, dayId: string) => Promise<void>;
   updateDay: (programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) => Promise<void>;
   deleteDay: (programId: string, weekId: string, dayId: string) => Promise<void>;
   rescheduleDay: (programId: string, weekId: string, dayId: string, scheduledDate: string, updatedBy: DayScheduleAuthor) => Promise<void>;
@@ -184,6 +197,10 @@ interface ProgramWorkspaceSnapshot {
   comments: ProgramComment[];
   dayLogs: ProgramDayLog[];
   isLoading: boolean;
+  pendingTrainingSyncCount: number;
+  isTrainingSyncing: boolean;
+  trainingSyncError: string | null;
+  lastTrainingSyncedAt: string | null;
 }
 
 interface TrainingSetOutboxItem {
@@ -302,7 +319,10 @@ let templates: ProgramTemplate[] = [];
 let comments: ProgramComment[] = [];
 let dayLogs: ProgramDayLog[] = [];
 let isLoading = true;
-let workspaceSnapshot: ProgramWorkspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
+let isTrainingSyncing = false;
+let trainingSyncError: string | null = null;
+let lastTrainingSyncedAt: string | null = null;
+let workspaceSnapshot: ProgramWorkspaceSnapshot = { programs, templates, comments, dayLogs, isLoading, pendingTrainingSyncCount: 0, isTrainingSyncing, trainingSyncError, lastTrainingSyncedAt };
 let workspaceRestorePromise: Promise<void> | null = null;
 let workspaceWriteQueue = Promise.resolve();
 let trainingSetOutbox: TrainingSetOutboxItem[] = [];
@@ -310,7 +330,7 @@ let trainingSyncQueue = Promise.resolve();
 const workspaceSyncs = new Map<string, Promise<void>>();
 
 function publishWorkspaceSnapshot() {
-  workspaceSnapshot = { programs, templates, comments, dayLogs, isLoading };
+  workspaceSnapshot = { programs, templates, comments, dayLogs, isLoading, pendingTrainingSyncCount: trainingSetOutbox.length, isTrainingSyncing, trainingSyncError, lastTrainingSyncedAt };
   notifyWorkspaceListeners();
 }
 
@@ -415,6 +435,7 @@ function normalizeTrainingSetOutboxItem(value: unknown): TrainingSetOutboxItem |
 async function persistTrainingSetOutbox(nextOutbox: TrainingSetOutboxItem[]) {
   trainingSetOutbox = nextOutbox;
   await writeWorkspaceItem(trainingSetOutboxStorageKey, JSON.stringify(nextOutbox));
+  publishWorkspaceSnapshot();
 }
 
 async function enqueueTrainingSetResult(item: TrainingSetOutboxItem) {
@@ -426,19 +447,33 @@ async function enqueueTrainingSetResult(item: TrainingSetOutboxItem) {
 
 async function flushTrainingSetOutbox(accessToken: string, ownerUserId: string, athleteProfileId: string) {
   const run = trainingSyncQueue.then(async () => {
-    const pending = trainingSetOutbox.filter((item) => item.ownerUserId === ownerUserId && item.athleteProfileId === athleteProfileId);
-    for (const item of pending) {
-      try {
-        await synchronizeLoggedSet(accessToken, item.request);
-        await persistTrainingSetOutbox(trainingSetOutbox.filter((candidate) => candidate.request.idempotencyKey !== item.request.idempotencyKey));
-      }
-      catch (error) {
-        if (error instanceof PlatformApiError && error.status >= 400 && error.status < 500 && error.status !== 401) {
+    isTrainingSyncing = true;
+    trainingSyncError = null;
+    publishWorkspaceSnapshot();
+    try {
+      const pending = trainingSetOutbox.filter((item) => item.ownerUserId === ownerUserId && item.athleteProfileId === athleteProfileId);
+      for (const item of pending) {
+        try {
+          await synchronizeLoggedSet(accessToken, item.request);
           await persistTrainingSetOutbox(trainingSetOutbox.filter((candidate) => candidate.request.idempotencyKey !== item.request.idempotencyKey));
-          continue;
         }
-        throw error;
+        catch (error) {
+          if (error instanceof PlatformApiError && error.status >= 400 && error.status < 500 && error.status !== 401) {
+            await persistTrainingSetOutbox(trainingSetOutbox.filter((candidate) => candidate.request.idempotencyKey !== item.request.idempotencyKey));
+            continue;
+          }
+          throw error;
+        }
       }
+      lastTrainingSyncedAt = new Date().toISOString();
+    }
+    catch (error) {
+      trainingSyncError = error instanceof Error ? error.message : "Training data could not be synchronized.";
+      throw error;
+    }
+    finally {
+      isTrainingSyncing = false;
+      publishWorkspaceSnapshot();
     }
   });
   trainingSyncQueue = run.catch(() => undefined);
@@ -583,6 +618,33 @@ async function applyRemoteTrainingLog(remote: LiveTrainingLogResponse) {
   }
 }
 
+async function clearRemoteTrainingLog(athleteProfileId: string) {
+  const removedProgramIds = new Set(programs
+    .filter((program) => program.athleteId === athleteProfileId && program.serverManaged)
+    .map((program) => program.id));
+  if (!removedProgramIds.size) {
+    return;
+  }
+
+  const previousPrograms = programs;
+  const previousDayLogs = dayLogs;
+  programs = programs.filter((program) => !removedProgramIds.has(program.id));
+  dayLogs = dayLogs.filter((dayLog) => !removedProgramIds.has(dayLog.programId));
+  publishWorkspaceSnapshot();
+  try {
+    await Promise.all([
+      writeWorkspaceItem(programStorageKey, JSON.stringify(programs)),
+      writeWorkspaceItem(dayLogStorageKey, JSON.stringify(dayLogs))
+    ]);
+  }
+  catch (error) {
+    programs = previousPrograms;
+    dayLogs = previousDayLogs;
+    publishWorkspaceSnapshot();
+    throw error;
+  }
+}
+
 function synchronizeTrainingWorkspace(accessToken: string, ownerUserId: string, role: "COACH" | "ATHLETE", athleteProfileId: string) {
   const syncKey = `${ownerUserId}:${athleteProfileId}`;
   const existing = workspaceSyncs.get(syncKey);
@@ -597,6 +659,9 @@ function synchronizeTrainingWorkspace(accessToken: string, ownerUserId: string, 
       : await getAthleteLiveTrainingLog(accessToken, athleteProfileId);
     if (remote) {
       await applyRemoteTrainingLog(remote);
+    }
+    else {
+      await clearRemoteTrainingLog(athleteProfileId);
     }
   })();
   workspaceSyncs.set(syncKey, sync);
@@ -742,6 +807,39 @@ function toRemotePrescriptionMode(mode: PrescriptionMode): LiveTrainingLogRespon
   return "rpe";
 }
 
+function toProgramTemplateRequest(template: ProgramTemplate): ProgramTemplateRequest {
+  return {
+    name: template.name,
+    goal: template.goal,
+    phase: template.phase,
+    trainingDaysPerWeek: template.trainingDaysPerWeek,
+    weeks: [...template.weeks].sort((left, right) => left.weekNumber - right.weekNumber).map((week) => ({
+      weekNumber: week.weekNumber,
+      name: week.name,
+      days: [...week.days].sort((left, right) => left.sequence - right.sequence).map((day) => ({
+        dayNumber: day.sequence,
+        name: day.name,
+        focus: day.focus,
+        exercises: day.exercises.map((exercise, sortOrder) => ({ sortOrder, name: exercise.name, exerciseType: toRemoteExerciseType(exercise.category), sets: exercise.sets, repetitions: exercise.repetitions, prescriptionMode: toRemotePrescriptionMode(exercise.prescriptionMode), prescriptionValue: exercise.prescriptionValue, weightUnit: exercise.weightUnit }))
+      }))
+    }))
+  };
+}
+
+function mapRemoteTemplate(remote: ProgramTemplateResponse, coachId: string): ProgramTemplate {
+  return {
+    id: remote.id,
+    coachId,
+    name: remote.name,
+    phase: isProgramPhase(remote.phase) ? remote.phase : "Strength",
+    goal: remote.goal,
+    trainingDaysPerWeek: remote.trainingDaysPerWeek,
+    createdAt: remote.updatedAt,
+    updatedAt: remote.updatedAt,
+    weeks: remote.weeks.map((week) => ({ id: week.id, weekNumber: week.weekNumber, name: week.name, days: week.days.map((day) => ({ id: day.id, sequence: day.dayNumber, name: day.name, focus: day.focus, exercises: day.exercises.map((exercise) => ({ id: exercise.id, category: mapExerciseCategory(exercise.exerciseType), name: exercise.name, sets: exercise.sets, repetitions: exercise.repetitions, prescriptionMode: exercise.prescriptionMode === "percentageOfOneRepMax" ? "percent" : exercise.prescriptionMode === "exactLoad" ? "exact" : "rpe", prescriptionValue: exercise.prescriptionValue, weightUnit: exercise.weightUnit })) })) }))
+  };
+}
+
 export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   const { session } = useSession();
   const snapshot = useSyncExternalStore(subscribeToWorkspace, getWorkspaceSnapshot, getWorkspaceSnapshot);
@@ -756,6 +854,20 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     }
     void synchronizeTrainingWorkspace(session.accessToken, session.userId, session.role, session.activeAthleteId).catch(() => undefined);
   }, [session?.accessToken, session?.activeAthleteId, session?.role, session?.userId]);
+
+  useEffect(() => {
+    if (!session || session.role !== "COACH" || isStaticDemo) return;
+    void (async () => {
+      await ensureWorkspaceLoaded();
+      const remote = await getProgramTemplates(session.accessToken);
+      const localOnly = templates.filter((template) => template.coachId === session.userId
+        && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(template.id)
+        && !remote.some((candidate) => candidate.name === template.name && candidate.goal === template.goal));
+      const uploaded = await Promise.all(localOnly.map((template) => createProgramTemplate(session.accessToken, toProgramTemplateRequest(template))));
+      const synchronized = [...remote, ...uploaded].map((template) => mapRemoteTemplate(template, session.userId));
+      await persistTemplates([...templates.filter((template) => template.coachId !== session.userId), ...synchronized], false);
+    })().catch(() => undefined);
+  }, [session?.accessToken, session?.role, session?.userId]);
 
   async function persistPrograms(nextPrograms: TrainingProgram[]) {
     const previousPrograms = programs;
@@ -773,17 +885,26 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     }
   }
 
-  async function persistTemplates(nextTemplates: ProgramTemplate[]) {
+  async function persistTemplates(nextTemplates: ProgramTemplate[], synchronize = true) {
     const previousTemplates = templates;
     templates = nextTemplates;
     publishWorkspaceSnapshot();
     try {
       await writeWorkspaceItem(templateStorageKey, JSON.stringify(nextTemplates));
+      if (synchronize && session?.role === "COACH" && !isStaticDemo) {
+        const removed = previousTemplates.filter((template) => template.coachId === session.userId && !nextTemplates.some((candidate) => candidate.id === template.id));
+        const changed = nextTemplates.filter((template) => template.coachId === session.userId && previousTemplates.some((candidate) => candidate.id === template.id && JSON.stringify(candidate) !== JSON.stringify(template)));
+        await Promise.all([
+          ...removed.map((template) => deleteProgramTemplate(session.accessToken, template.id)),
+          ...changed.map((template) => replaceProgramTemplate(session.accessToken, template.id, toProgramTemplateRequest(template)))
+        ]);
+      }
     }
     catch (error) {
       if (templates === nextTemplates) {
         templates = previousTemplates;
         publishWorkspaceSnapshot();
+        await writeWorkspaceItem(templateStorageKey, JSON.stringify(previousTemplates)).catch(() => undefined);
       }
       throw error;
     }
@@ -885,6 +1006,13 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
 
   async function deleteProgram(programId: string) {
     await ensureWorkspaceLoaded();
+    const program = programs.find((candidate) => candidate.id === programId);
+    if (program?.serverManaged) {
+      if (!session || session.role !== "COACH" || isStaticDemo) {
+        throw new Error("Only the assigning coach can remove this live program.");
+      }
+      await removeLiveTrainingBlock(session.accessToken, program.id);
+    }
     await persistPrograms(programs.filter((program) => program.id !== programId));
     await persistComments(comments.filter((comment) => comment.programId !== programId));
     await persistDayLogs(dayLogs.filter((dayLog) => dayLog.programId !== programId));
@@ -893,8 +1021,13 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
   async function createTemplate(coachId: string, input: ProgramTemplateInput): Promise<ProgramTemplate> {
     await ensureWorkspaceLoaded();
     const now = new Date().toISOString();
-    const template: ProgramTemplate = { ...input, id: createId("template"), coachId, createdAt: now, updatedAt: now, weeks: [createTemplateWeek(1)] };
-    await persistTemplates([...templates, template]);
+    const firstWeek = createTemplateWeek(1);
+    firstWeek.days = Array.from({ length: input.trainingDaysPerWeek }, (_, index) => createTemplateDay(`W1D${index + 1}`, "", [], index + 1));
+    const draft: ProgramTemplate = { ...input, id: createId("template"), coachId, createdAt: now, updatedAt: now, weeks: [firstWeek] };
+    const template = session?.role === "COACH" && !isStaticDemo
+      ? mapRemoteTemplate(await createProgramTemplate(session.accessToken, toProgramTemplateRequest(draft)), coachId)
+      : draft;
+    await persistTemplates([...templates, template], false);
     return template;
   }
 
@@ -908,6 +1041,11 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     await persistTemplates(templates.filter((template) => template.id !== templateId));
   }
 
+  async function shareTemplate(templateId: string, recipientEmail: string) {
+    if (!session || session.role !== "COACH" || isStaticDemo) throw new Error("Template sharing requires a hosted coach account.");
+    await shareProgramTemplate(session.accessToken, templateId, recipientEmail.trim());
+  }
+
   async function addTemplateWeek(templateId: string) {
     await ensureWorkspaceLoaded();
     const template = templates.find((candidate) => candidate.id === templateId);
@@ -917,9 +1055,33 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     if (template.weeks.length >= 52) {
       throw new Error("A master template can contain no more than 52 weeks.");
     }
+    const nextWeek = createTemplateWeek(template.weeks.length + 1);
+    nextWeek.days = Array.from({ length: template.trainingDaysPerWeek }, (_, index) => createTemplateDay(`W${nextWeek.weekNumber}D${index + 1}`, "", [], index + 1));
     await persistTemplates(templates.map((template) => template.id === templateId
-      ? { ...template, updatedAt: new Date().toISOString(), weeks: [...template.weeks, createTemplateWeek(template.weeks.length + 1)] }
+      ? { ...template, updatedAt: new Date().toISOString(), weeks: [...template.weeks, nextWeek] }
       : template));
+  }
+
+  async function duplicateTemplateWeek(templateId: string, weekId: string) {
+    await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const source = template?.weeks.find((week) => week.id === weekId);
+    if (!template || !source) throw new Error("The template week is no longer available.");
+    if (template.weeks.length >= 52) throw new Error("A master template can contain no more than 52 weeks.");
+    const weekNumber = Math.max(...template.weeks.map((week) => week.weekNumber)) + 1;
+    const duplicate: ProgramTemplateWeek = {
+      id: createId("template-week"),
+      weekNumber,
+      name: `${source.name} Copy`,
+      days: source.days.map((day) => ({
+        ...day,
+        id: createId("template-day"),
+        exercises: day.exercises.map((exercise) => ({ ...exercise, id: createId("exercise"), trainingSetIds: undefined }))
+      }))
+    };
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? { ...candidate, updatedAt: new Date().toISOString(), weeks: [...candidate.weeks, duplicate] }
+      : candidate));
   }
 
   async function deleteTemplateWeek(templateId: string, weekId: string) {
@@ -1001,6 +1163,25 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     return nextDay;
   }
 
+  async function duplicateTemplateDay(templateId: string, weekId: string, dayId: string) {
+    await ensureWorkspaceLoaded();
+    const template = templates.find((candidate) => candidate.id === templateId);
+    const week = template?.weeks.find((candidate) => candidate.id === weekId);
+    const source = week?.days.find((day) => day.id === dayId);
+    if (!template || !week || !source) throw new Error("The template training day is no longer available.");
+    if (week.days.length >= 7) throw new Error("A training week can contain no more than 7 days.");
+    const duplicate: ProgramTemplateDay = {
+      ...source,
+      id: createId("template-day"),
+      sequence: Math.max(...week.days.map((day) => day.sequence)) + 1,
+      name: `${source.name} Copy`,
+      exercises: source.exercises.map((exercise) => ({ ...exercise, id: createId("exercise"), trainingSetIds: undefined }))
+    };
+    await persistTemplates(templates.map((candidate) => candidate.id === templateId
+      ? updateTemplateStructure(candidate, weekId, (candidateWeek) => ({ ...candidateWeek, days: [...candidateWeek.days, duplicate] }))
+      : candidate));
+  }
+
   async function updateTemplateDay(templateId: string, weekId: string, dayId: string, day: Pick<ProgramTemplateDay, "name" | "focus">) {
     await ensureWorkspaceLoaded();
     await persistTemplates(templates.map((template) => template.id === templateId
@@ -1040,7 +1221,7 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       : candidate));
   }
 
-  async function assignTemplate(templateId: string, athleteId: string, startDate: string): Promise<TrainingProgram> {
+  async function assignTemplate(templateId: string, athleteId: string, startDate: string): Promise<ProgramAssignmentResult> {
     await ensureWorkspaceLoaded();
     const template = templates.find((candidate) => candidate.id === templateId);
     if (!template) {
@@ -1049,12 +1230,15 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     if (!isIsoDate(startDate)) {
       throw new Error("Choose a valid start date as YYYY-MM-DD.");
     }
+    if (session && !isStaticDemo) {
+      return assignProgramTemplate(session.accessToken, template.id, athleteId, startDate);
+    }
     const existingTrainingLog = programs.find((program) => program.athleteId === athleteId && program.status === "active" && (
       program.templateId === template.id ||
       (program.coachId === template.coachId && program.name === template.name)
     ));
     if (existingTrainingLog) {
-      return existingTrainingLog;
+      return { id: existingTrainingLog.id, name: existingTrainingLog.name, status: "accepted" };
     }
     const now = new Date().toISOString();
     const clonedWeeks = [...template.weeks].sort((left, right) => left.weekNumber - right.weekNumber).map((week) => ({
@@ -1075,7 +1259,26 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     const finalScheduledDate = clonedWeeks.flatMap((week) => week.days).map((day) => day.scheduledDate).sort().at(-1) ?? startDate;
     const trainingLog: TrainingProgram = { id: createId("live-log"), athleteId, coachId: template.coachId, templateId: template.id, name: template.name, phase: template.phase, goal: template.goal, startDate, endDate: finalScheduledDate, trainingDaysPerWeek: template.trainingDaysPerWeek, status: "active", updatedAt: now, weeks: clonedWeeks };
     await persistPrograms([...programs.map((program) => program.athleteId === athleteId && program.status === "active" ? { ...program, status: "completed" as const } : program), trainingLog]);
-    return trainingLog;
+    return { id: trainingLog.id, name: trainingLog.name, status: "accepted" };
+  }
+
+  async function applyAcceptedTrainingLog(trainingLog: LiveTrainingLogResponse) {
+    await ensureWorkspaceLoaded();
+    await applyRemoteTrainingLog(trainingLog);
+  }
+
+  async function activateProgram(programId: string) {
+    await ensureWorkspaceLoaded();
+    if (session && !isStaticDemo) {
+      const trainingLog = await activateTrainingBlock(session.accessToken, programId);
+      await applyRemoteTrainingLog(trainingLog);
+      return;
+    }
+    const selected = programs.find((program) => program.id === programId);
+    if (!selected) throw new Error("Training block was not found.");
+    await persistPrograms(programs.map((program) => program.athleteId !== selected.athleteId
+      ? program
+      : { ...program, status: program.id === selected.id ? "active" as const : program.status === "active" ? "completed" as const : program.status, updatedAt: new Date().toISOString() }));
   }
 
   async function addWeek(programId: string) {
@@ -1084,6 +1287,40 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       ? { ...program, updatedAt: new Date().toISOString(), weeks: [...program.weeks, createWeek(program.weeks.length + 1)] }
       : program);
     await persistPrograms(nextPrograms);
+  }
+
+  async function duplicateWeek(programId: string, weekId: string) {
+    await ensureWorkspaceLoaded();
+    const program = programs.find((candidate) => candidate.id === programId);
+    const source = program?.weeks.find((week) => week.id === weekId);
+    if (!program || !source) throw new Error("The program week is no longer available.");
+    if (program.weeks.length >= 52) throw new Error("A live program cannot contain more than 52 weeks.");
+    if (program.serverManaged && session && !isStaticDemo) {
+      if (session.role !== "COACH" || session.activeAthleteId !== program.athleteId) throw new Error("Only the linked coach can duplicate this week.");
+      await duplicateLiveTrainingWeek(session.accessToken, weekId);
+      const remote = await getAthleteLiveTrainingLog(session.accessToken, program.athleteId);
+      if (remote) await applyRemoteTrainingLog(remote);
+      return;
+    }
+    const weekNumber = Math.max(...program.weeks.map((week) => week.weekNumber)) + 1;
+    const dateOffset = (weekNumber - source.weekNumber) * 7;
+    const duplicate: ProgramWeek = {
+      id: createId("week"),
+      weekNumber,
+      name: `${source.name} Copy`,
+      days: source.days.map((day) => ({
+        ...day,
+        id: createId("day"),
+        scheduledDate: addCalendarDays(day.scheduledDate, dateOffset),
+        scheduleUpdatedBy: "coach",
+        scheduleUpdatedAt: new Date().toISOString(),
+        exercises: day.exercises.map((exercise) => ({ ...exercise, id: createId("exercise"), trainingSetIds: undefined }))
+      }))
+    };
+    const endDate = duplicate.days.map((day) => day.scheduledDate).sort().at(-1) ?? program.endDate;
+    await persistPrograms(programs.map((candidate) => candidate.id === programId
+      ? { ...candidate, endDate: endDate > candidate.endDate ? endDate : candidate.endDate, updatedAt: new Date().toISOString(), weeks: [...candidate.weeks, duplicate] }
+      : candidate));
   }
 
   async function updateWeek(programId: string, weekId: string, name: string) {
@@ -1128,6 +1365,36 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
       : program);
     await persistPrograms(nextPrograms);
     return nextDay;
+  }
+
+  async function duplicateDay(programId: string, weekId: string, dayId: string) {
+    await ensureWorkspaceLoaded();
+    const program = programs.find((candidate) => candidate.id === programId);
+    const week = program?.weeks.find((candidate) => candidate.id === weekId);
+    const source = week?.days.find((day) => day.id === dayId);
+    if (!program || !week || !source) throw new Error("The training day is no longer available.");
+    if (week.days.length >= 7) throw new Error("A training week can contain no more than 7 days.");
+    if (program.serverManaged && session && !isStaticDemo) {
+      if (session.role !== "COACH" || session.activeAthleteId !== program.athleteId) throw new Error("Only the linked coach can duplicate this workout.");
+      await duplicateLiveTrainingDay(session.accessToken, dayId);
+      const remote = await getAthleteLiveTrainingLog(session.accessToken, program.athleteId);
+      if (remote) await applyRemoteTrainingLog(remote);
+      return;
+    }
+    const scheduledDate = addCalendarDays([...week.days].sort((left, right) => right.scheduledDate.localeCompare(left.scheduledDate))[0]?.scheduledDate ?? source.scheduledDate, 1);
+    const duplicate: ProgramDay = {
+      ...source,
+      id: createId("day"),
+      sequence: Math.max(...week.days.map((day) => day.sequence)) + 1,
+      name: `${source.name} Copy`,
+      scheduledDate,
+      scheduleUpdatedBy: "coach",
+      scheduleUpdatedAt: new Date().toISOString(),
+      exercises: source.exercises.map((exercise) => ({ ...exercise, id: createId("exercise"), trainingSetIds: undefined }))
+    };
+    await persistPrograms(programs.map((candidate) => candidate.id === programId
+      ? { ...updateProgramStructure(candidate, weekId, (candidateWeek) => ({ ...candidateWeek, days: [...candidateWeek.days, duplicate] })), endDate: scheduledDate > candidate.endDate ? scheduledDate : candidate.endDate }
+      : candidate));
   }
 
   async function updateDay(programId: string, weekId: string, dayId: string, day: Pick<ProgramDay, "name" | "focus"> & Partial<Pick<ProgramDay, "scheduledDate">>) {
@@ -1333,12 +1600,22 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     await persistComments([...comments, { ...comment, id: createId("comment"), createdAt: new Date().toISOString() }]);
   }
 
+  async function retryTrainingSync() {
+    if (!session?.activeAthleteId || isStaticDemo) return;
+    await flushTrainingSetOutbox(session.accessToken, session.userId, session.activeAthleteId);
+  }
+
   return {
     programs: snapshot.programs,
     templates: snapshot.templates,
     comments: snapshot.comments,
     dayLogs: snapshot.dayLogs,
     isLoading: snapshot.isLoading,
+    pendingTrainingSyncCount: trainingSetOutbox.filter((item) => item.ownerUserId === session?.userId).length,
+    isTrainingSyncing: snapshot.isTrainingSyncing,
+    trainingSyncError: snapshot.trainingSyncError,
+    lastTrainingSyncedAt: snapshot.lastTrainingSyncedAt,
+    retryTrainingSync,
     createProgram,
     updateProgram,
     restoreProgramSnapshot,
@@ -1346,21 +1623,28 @@ export function useProgramWorkspaceStore(): ProgramWorkspaceStore {
     createTemplate,
     updateTemplate,
     deleteTemplate,
+    shareTemplate,
     addTemplateWeek,
+    duplicateTemplateWeek,
     deleteTemplateWeek,
     deleteTemplateDay,
     ensureTemplateDays,
     updateTemplateWeek,
     addTemplateDay,
+    duplicateTemplateDay,
     updateTemplateDay,
     addTemplateExercise,
     updateTemplateExercise,
     deleteTemplateExercise,
     assignTemplate,
+    applyAcceptedTrainingLog,
+    activateProgram,
     addWeek,
+    duplicateWeek,
     updateWeek,
     deleteWeek,
     addDay,
+    duplicateDay,
     updateDay,
     deleteDay,
     rescheduleDay,

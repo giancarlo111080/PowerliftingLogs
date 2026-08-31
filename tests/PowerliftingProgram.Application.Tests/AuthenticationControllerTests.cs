@@ -16,6 +16,26 @@ namespace PowerliftingProgram.Application.Tests;
 public sealed class AuthenticationControllerTests
 {
     [Fact]
+    public async Task RegisterAthlete_ClassifiesIpfDivisionWeightAndEquipment()
+    {
+        await using var database = CreateDatabase();
+        var controller = CreateController(database, new RecordingPasswordResetEmailService());
+        var birthDate = new DateOnly(DateTime.UtcNow.Year - 45, 6, 15);
+
+        var result = await controller.Register(
+            new RegisterRequest("Equipped Lifter", "equipped@example.com", "OriginalPassword!", "ph", PlatformRole.Athlete, null,
+                birthDate, AthleteSex.Female, 69.5m, PowerliftingExperience.Novice, PowerliftingEquipment.Equipped, "IPF"),
+            CancellationToken.None);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var account = Assert.IsType<SessionResponse>(created.Value).Account;
+        Assert.Equal("Master I", account.CompetitionAgeDivision);
+        Assert.Equal("76", account.CompetitionWeightClass);
+        Assert.Equal(PowerliftingExperience.Novice, account.Experience);
+        Assert.Equal(PowerliftingEquipment.Equipped, account.Equipment);
+    }
+
+    [Fact]
     public async Task RegisterCoach_WithoutCoachAssignment_DoesNotGrantTrainingWorkspace()
     {
         await using var database = CreateDatabase();

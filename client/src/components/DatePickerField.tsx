@@ -8,6 +8,11 @@ interface DatePickerFieldProps {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
+  placeholder?: string;
+  containerClassName?: string;
+  inputClassName?: string;
+  labelClassName?: string;
+  preserveTime?: boolean;
   accessibilityLabel?: string;
 }
 
@@ -27,16 +32,16 @@ function monthLabel(year: number, month: number) {
   return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(year, month, 1)));
 }
 
-export function DatePickerField({ label, value, onChangeText, accessibilityLabel }: DatePickerFieldProps) {
+export function DatePickerField({ label, value, onChangeText, placeholder = "YYYY-MM-DD", containerClassName = "flex-1", inputClassName = "font-serif text-base", labelClassName = "font-serif font-bold tracking-widest text-[#8996AC]", preserveTime = false, accessibilityLabel }: DatePickerFieldProps) {
   const { theme } = useThemePreference();
   const [isOpen, setIsOpen] = useState(false);
   const surfaceIconColor = theme === "dark" ? "#F5F7FB" : "#111827";
   const [visibleMonth, setVisibleMonth] = useState(() => {
-    const date = dateFromIso(value) ?? new Date();
+    const date = dateFromIso(value.slice(0, 10)) ?? new Date();
     return { year: date.getUTCFullYear(), month: date.getUTCMonth() };
   });
-  const selectedDate = dateFromIso(value);
-  const selectedIsoDate = selectedDate ? value : null;
+  const selectedDate = dateFromIso(value.slice(0, 10));
+  const selectedIsoDate = selectedDate ? value.slice(0, 10) : null;
   const today = new Date();
   const todayIsoDate = isoDate(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
   const firstDayOfMonth = new Date(Date.UTC(visibleMonth.year, visibleMonth.month, 1)).getUTCDay();
@@ -55,19 +60,20 @@ export function DatePickerField({ label, value, onChangeText, accessibilityLabel
   }
 
   function selectDate(day: number) {
-    onChangeText(isoDate(visibleMonth.year, visibleMonth.month, day));
+    const nextDate = isoDate(visibleMonth.year, visibleMonth.month, day);
+    onChangeText(preserveTime && value.includes("T") ? `${nextDate}${value.slice(10)}` : nextDate);
     setIsOpen(false);
   }
 
   return (
-    <View className="flex-1 gap-1.5">
-      <Text className="font-serif text-xs font-bold uppercase tracking-widest text-[#8996AC]">{label}</Text>
+    <View className={`${containerClassName} gap-1.5`}>
+      <Text className={`${labelClassName} text-xs uppercase`}>{label}</Text>
       <View className="flex-row gap-2">
         <TextInput
-          className="min-h-11 flex-1 border border-fog bg-canvas px-3 font-serif text-base text-ink"
+          className={`min-h-11 flex-1 border border-fog bg-canvas px-3 text-ink ${inputClassName}`}
           value={value}
           onChangeText={onChangeText}
-          placeholder="YYYY-MM-DD"
+          placeholder={placeholder}
           placeholderTextColor="#8996AC"
           autoCapitalize="none"
           accessibilityLabel={accessibilityLabel ?? label}
@@ -108,7 +114,7 @@ export function DatePickerField({ label, value, onChangeText, accessibilityLabel
                 return <Pressable key={dayIsoDate} className={`h-10 w-[14.2857%] items-center justify-center ${isSelected ? "bg-signal" : isToday ? "border border-signal" : ""}`} onPress={() => selectDate(day)} accessibilityLabel={`Choose ${dayIsoDate}`} accessibilityState={{ selected: isSelected }}><Text className={`font-serif text-sm font-bold ${isSelected ? "text-white" : "text-ink"}`}>{day}</Text></Pressable>;
               })}
             </View>
-            <Pressable className="mt-5 min-h-11 flex-row items-center justify-center gap-2 border border-fog bg-canvas px-4 py-3" onPress={() => { onChangeText(todayIsoDate); setIsOpen(false); }} accessibilityLabel="Choose today">
+            <Pressable className="mt-5 min-h-11 flex-row items-center justify-center gap-2 border border-fog bg-canvas px-4 py-3" onPress={() => { onChangeText(preserveTime && value.includes("T") ? `${todayIsoDate}${value.slice(10)}` : todayIsoDate); setIsOpen(false); }} accessibilityLabel="Choose today">
               <CalendarDays size={16} color={surfaceIconColor} />
               <Text className="font-serif text-sm font-bold text-ink">Today</Text>
             </Pressable>

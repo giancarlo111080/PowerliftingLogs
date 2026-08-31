@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { KeyboardAvoidingView, Modal, Platform, Pressable, Text, TextInput, View } from "react-native";
-import { Link2, X } from "lucide-react-native";
+import { ClipboardPaste, Link2, X } from "lucide-react-native";
 
 import { isInstagramVideoUrl } from "../lib/instagram";
 
@@ -15,6 +15,25 @@ export function InstagramLinkModal({ visible, exerciseName, onClose, onSave }: I
   const [instagramVideoUrl, setInstagramVideoUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  async function pasteFromClipboard() {
+    if (Platform.OS !== "web" || !globalThis.navigator?.clipboard) {
+      setError("Use your device's paste command to insert the Instagram link.");
+      return;
+    }
+    try {
+      const value = await globalThis.navigator.clipboard.readText();
+      if (!value.trim()) {
+        setError("The clipboard is empty.");
+        return;
+      }
+      setInstagramVideoUrl(value.trim());
+      setError(null);
+    }
+    catch {
+      setError("Clipboard access was blocked. Allow clipboard access or use Ctrl+V in the field.");
+    }
+  }
 
   async function submit() {
     const value = instagramVideoUrl.trim();
@@ -56,17 +75,20 @@ export function InstagramLinkModal({ visible, exerciseName, onClose, onSave }: I
               <X size={20} color="#17212B" />
             </Pressable>
           </View>
-          <TextInput
-            className="rounded-md border border-fog bg-white px-4 py-3 font-serif text-base text-ink"
-            value={instagramVideoUrl}
-            onChangeText={setInstagramVideoUrl}
-            placeholder="https://www.instagram.com/reel/..."
-            placeholderTextColor="#688078"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-            accessibilityLabel="Instagram video URL"
-          />
+          <View className="flex-row gap-2">
+            <TextInput
+              className="min-h-11 flex-1 rounded-md border border-fog bg-white px-4 py-3 font-serif text-base text-ink"
+              value={instagramVideoUrl}
+              onChangeText={(value) => { setInstagramVideoUrl(value); setError(null); }}
+              placeholder="https://www.instagram.com/reel/..."
+              placeholderTextColor="#688078"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              accessibilityLabel="Instagram video URL"
+            />
+            {Platform.OS === "web" ? <Pressable className="h-11 w-11 items-center justify-center rounded-md border border-fog bg-canvas" onPress={() => void pasteFromClipboard()} accessibilityLabel="Paste Instagram link"><ClipboardPaste size={18} color="#17212B" /></Pressable> : null}
+          </View>
           {error ? <Text className="mt-2 font-serif text-sm text-signal">{error}</Text> : null}
           <Pressable
             className="mt-5 flex-row items-center justify-center gap-2 rounded-md bg-ink py-3.5 disabled:opacity-50"

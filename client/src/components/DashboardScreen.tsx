@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Activity, ArrowRight, CheckCircle2, ChevronRight, CircleAlert, ClipboardCheck, ClipboardList, Dumbbell, Instagram, Link2, Play, Save, Send, Trophy, Users } from "lucide-react-native";
 import { router } from "expo-router";
@@ -7,7 +7,7 @@ import { useSession } from "../auth/AuthSessionContext";
 import { formatTonnage, getCoachInsights, getCoachReviewItems } from "../data/dashboardData";
 import { getProgramAnalytics } from "../data/programAnalytics";
 import { useProgramWorkspaceStore } from "../data/programWorkspaceStore";
-import { createAthleteInvitation } from "../lib/platformApi";
+import { acceptProgramOffer, createAthleteInvitation, declineProgramOffer, getProgramOffers, type ProgramOfferResponse } from "../lib/platformApi";
 import { AppShell } from "./AppShell";
 
 function ProgressBar({ value, color = "#2E6F5E" }: { value: number; color?: string }) {
@@ -31,17 +31,64 @@ function Metric({ label, value, detail, accent = "#2E6F5E" }: { label: string; v
   return (
     <View className="min-h-28 flex-1 border border-fog bg-paper p-4">
       <Text className="font-serif text-xs font-bold uppercase tracking-widest text-[#688078]">{label}</Text>
-      <Text className="mt-3 font-serif text-3xl font-bold" style={{ color: accent }}>{value}</Text>
+      <Text className="mt-3 font-serif text-3xl font-bold text-ink" style={accent ? { color: accent } : undefined}>{value}</Text>
       <Text className="mt-1 font-serif text-xs text-[#52675F]">{detail}</Text>
     </View>
   );
 }
 
 function LifterDashboard() {
-  const { currentProfile } = useSession();
-  const { programs, dayLogs, isLoading } = useProgramWorkspaceStore();
+  const { session, currentProfile } = useSession();
+  const { programs, dayLogs, isLoading, applyAcceptedTrainingLog } = useProgramWorkspaceStore();
+  const [programOffers, setProgramOffers] = useState<ProgramOfferResponse[]>([]);
+  const [respondingOfferId, setRespondingOfferId] = useState<string | null>(null);
+  const [offerMessage, setOfferMessage] = useState<string | null>(null);
   const athletePrograms = programs.filter((program) => program.athleteId === currentProfile?.id).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   const activeProgram = athletePrograms.find((program) => program.status === "active") ?? athletePrograms[0] ?? null;
+
+  useEffect(() => {
+    if (!session) return;
+    let isCurrent = true;
+    void getProgramOffers(session.accessToken)
+      .then((offers) => { if (isCurrent) setProgramOffers(offers); })
+      .catch((reason) => { if (isCurrent) setOfferMessage(reason instanceof Error ? reason.message : "Could not load program offers."); });
+    return () => { isCurrent = false; };
+  }, [session?.accessToken]);
+
+  async function acceptOffer(offer: ProgramOfferResponse) {
+    if (!session) return;
+    setRespondingOfferId(offer.id);
+    setOfferMessage(null);
+    try {
+      const trainingLog = await acceptProgramOffer(session.accessToken, offer.id);
+      await applyAcceptedTrainingLog(trainingLog);
+      setProgramOffers((offers) => offers.filter((candidate) => candidate.id !== offer.id));
+      setOfferMessage(`${offer.name} is now available in your training log.`);
+    }
+    catch (reason) {
+      setOfferMessage(reason instanceof Error ? reason.message : "Could not accept this program.");
+    }
+    finally {
+      setRespondingOfferId(null);
+    }
+  }
+
+  async function declineOffer(offer: ProgramOfferResponse) {
+    if (!session) return;
+    setRespondingOfferId(offer.id);
+    setOfferMessage(null);
+    try {
+      await declineProgramOffer(session.accessToken, offer.id);
+      setProgramOffers((offers) => offers.filter((candidate) => candidate.id !== offer.id));
+      setOfferMessage(`${offer.name} was declined. Your current training plan has not changed.`);
+    }
+    catch (reason) {
+      setOfferMessage(reason instanceof Error ? reason.message : "Could not decline this program.");
+    }
+    finally {
+      setRespondingOfferId(null);
+    }
+  }
 
   if (isLoading || !currentProfile) {
     return <View className="flex-1 items-center justify-center"><ActivityIndicator color="#2E6F5E" /><Text className="mt-3 font-serif text-sm text-[#52675F]">Preparing dashboard</Text></View>;
@@ -76,6 +123,39 @@ function LifterDashboard() {
         <Text className="mt-2 font-serif text-base text-[#52675F]">{currentProfile.upcomingMeet ?? "No meet scheduled"} · {nextDay?.focus ?? "No workout scheduled"}</Text>
       </View>
 
+      {programOffers.length || offerMessage ? (
+        <View>
+          <SectionHeading eyebrow="Coach programs" title="Awaiting your approval" />
+          {offerMessage ? <View className="mb-3 border border-fog bg-paper px-4 py-3"><Text className="font-serif text-sm text-ink">{offerMessage}</Text></View> : null}
+          <View className="border border-fog bg-paper">
+            {programOffers.map((offer, index) => {
+              const isResponding = respondingOfferId === offer.id;
+              return (
+                <View key={offer.id} className={`gap-4 px-4 py-5 ${index ? "border-t border-fog" : ""}`}>
+                  <View className="flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                    <View className="flex-1">
+                      <Text className="font-serif text-xs font-bold uppercase tracking-widest text-moss">From {offer.coachName}</Text>
+                      <Text className="mt-1 font-serif text-xl font-bold text-ink">{offer.name}</Text>
+                      <Text className="mt-2 font-serif text-sm leading-5 text-[#52675F]">{offer.goal}</Text>
+                      <Text className="mt-3 font-serif text-xs text-[#688078]">{offer.phase ?? "Training"} · {offer.trainingDaysPerWeek} days/week · {offer.startsOn} to {offer.endsOn}</Text>
+                    </View>
+                    <View className="flex-row gap-2">
+                      <Pressable disabled={isResponding} className="min-h-11 items-center justify-center border border-fog px-4 py-3 disabled:opacity-50" onPress={() => void declineOffer(offer)} accessibilityLabel={`Decline ${offer.name}`}>
+                        <Text className="font-serif text-sm font-bold text-[#52675F]">Decline</Text>
+                      </Pressable>
+                      <Pressable disabled={isResponding} className="min-h-11 min-w-24 items-center justify-center bg-moss px-4 py-3 disabled:opacity-50" onPress={() => void acceptOffer(offer)} accessibilityLabel={`Accept ${offer.name}`}>
+                        {isResponding ? <ActivityIndicator color="#FFFFFF" /> : <Text className="font-serif text-sm font-bold text-white">Accept</Text>}
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Text className="font-serif text-xs leading-5 text-[#52675F]">Accepting replaces your current active plan. Your completed training and program history remain preserved.</Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
+
       <View className="flex-col gap-3 sm:flex-row">
         <Metric label="Readiness estimate" value={`${analytics.currentReadinessScore}`} detail={`Fatigue estimate ${analytics.currentFatigueScore} / 100`} />
         <Metric label="Program adherence" value={`${analytics.adherencePercent}%`} detail={`${analytics.completedSets} of ${analytics.plannedSets} prescribed sets`} accent="#D74F32" />
@@ -97,7 +177,7 @@ function LifterDashboard() {
         <View className="flex-col gap-3 sm:flex-row">
           <Metric label="Squat" value={currentProfile.squatOneRepMaxKg ? `${currentProfile.squatOneRepMaxKg} kg` : "Not set"} detail="Competition baseline" />
           <Metric label="Bench press" value={currentProfile.benchOneRepMaxKg ? `${currentProfile.benchOneRepMaxKg} kg` : "Not set"} detail="Competition baseline" accent="#D74F32" />
-          <Metric label="Deadlift" value={currentProfile.deadliftOneRepMaxKg ? `${currentProfile.deadliftOneRepMaxKg} kg` : "Not set"} detail="Competition baseline" accent="#17212B" />
+          <Metric label="Deadlift" value={currentProfile.deadliftOneRepMaxKg ? `${currentProfile.deadliftOneRepMaxKg} kg` : "Not set"} detail="Competition baseline" />
         </View>
       </View>
 

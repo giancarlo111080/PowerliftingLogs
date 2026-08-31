@@ -182,6 +182,11 @@ app.UseCors("client");
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" })).AllowAnonymous();
+app.MapGet("/health/ready", async (TrainingDbContext database, CancellationToken cancellationToken) =>
+    await database.Database.CanConnectAsync(cancellationToken)
+        ? Results.Ok(new { status = "ready" })
+        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable)).AllowAnonymous();
 app.MapControllers();
 app.Run();
 

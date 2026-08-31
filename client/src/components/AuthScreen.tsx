@@ -6,6 +6,8 @@ import { router } from "expo-router";
 import { completePasswordReset, getInvitationContext, isStaticDemo, PlatformApiError, requestPasswordReset, staticDemoCredentials, type PlatformRole } from "../lib/platformApi";
 import { useSession } from "../auth/AuthSessionContext";
 import { CountryPickerField } from "./CountryPickerField";
+import { DatePickerField } from "./DatePickerField";
+import { ipfClassification, type CompetitionSex, type PowerliftingEquipment, type PowerliftingExperience } from "../data/competitionClassification";
 
 type AuthMode = "sign-in" | "register" | "forgot-password" | "reset-password";
 
@@ -22,6 +24,11 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
   const [role, setRole] = useState<PlatformRole>(invitationToken ? "ATHLETE" : "ATHLETE");
   const [displayName, setDisplayName] = useState("");
   const [countryCode, setCountryCode] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [competitionSex, setCompetitionSex] = useState<CompetitionSex>("Female");
+  const [bodyWeightKg, setBodyWeightKg] = useState("");
+  const [experience, setExperience] = useState<PowerliftingExperience>("Novice");
+  const [equipment, setEquipment] = useState<PowerliftingEquipment>("Classic");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -132,11 +139,16 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
       setMessage("Your passwords do not match.");
       return;
     }
+    const bodyWeight = Number(bodyWeightKg);
+    if (mode === "register" && role === "ATHLETE" && (!ipfClassification(dateOfBirth, competitionSex, bodyWeight) || bodyWeight < 20 || bodyWeight > 500)) {
+      setMessage("Enter a valid date of birth for an athlete age 14 or older and a body weight between 20 and 500 kg.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       if (mode === "register") {
-        await register({ displayName: displayName.trim(), email: email.trim(), password, countryCode: countryCode.trim().toUpperCase(), role, invitationToken });
+        await register({ displayName: displayName.trim(), email: email.trim(), password, countryCode: countryCode.trim().toUpperCase(), role, invitationToken, ...(role === "ATHLETE" ? { dateOfBirth, sex: competitionSex, bodyWeightKg: bodyWeight, experience, equipment, federationCode: "IPF" } : {}) });
       }
       else {
         await login(email.trim(), password, invitationToken);
@@ -182,6 +194,7 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
   const heading = isRegistering ? "Build Your Base" : isForgotPassword ? "Recover Access" : isResettingPassword ? "Set New Password" : "Enter The Platform";
   const supportingText = isRegistering ? "Create the account that owns your training." : isForgotPassword ? "Enter your account email to create a one-hour reset link." : isResettingPassword ? "Choose a new password for your Iron Forge account." : "Sign in to your coaching or athlete workspace.";
   const actionLabel = isRegistering ? "Create account" : isForgotPassword ? "Create reset link" : isResettingPassword ? "Reset password" : "Sign in";
+  const classification = ipfClassification(dateOfBirth, competitionSex, Number(bodyWeightKg));
   return (
     <View className="flex-1 bg-canvas px-5 py-8 sm:items-center sm:justify-center">
       <View className="w-full max-w-xl">
@@ -201,6 +214,7 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
           <View className="mt-5 gap-4">
             {isRegistering ? <Field label="Display name" value={displayName} onChangeText={setDisplayName} placeholder="How your coach will know you" /> : null}
             {isRegistering ? <CountryPickerField value={countryCode} onChange={setCountryCode} /> : null}
+            {isRegistering && role === "ATHLETE" ? <><DatePickerField label="Date of birth" value={dateOfBirth} onChangeText={setDateOfBirth} containerClassName="" inputClassName="font-sans text-base" labelClassName="font-heading text-muted" /><ChoiceField label="IPF bodyweight category" value={competitionSex} options={["Female", "Male"]} onChange={setCompetitionSex} /><Field label="Current body weight (kg)" value={bodyWeightKg} onChangeText={setBodyWeightKg} placeholder="Example: 74" keyboardType="decimal-pad" /><ChoiceField label="Competition experience" value={experience} options={["Novice", "Experienced"]} onChange={setExperience} /><Text className="-mt-2 font-sans text-xs leading-5 text-muted">Novice means no prior powerlifting meet. Meet eligibility is set by each organizer.</Text><ChoiceField label="Equipment discipline" value={equipment} options={["Classic", "Equipped"]} onChange={setEquipment} /><Text className="-mt-2 font-sans text-xs leading-5 text-muted">Classic permits approved belts, wrist wraps, and knee sleeves. Equipped permits supportive suits, bench shirts, and knee wraps under IPF rules.</Text>{classification ? <View className="border border-moss bg-moss/10 p-3"><Text className="font-heading text-sm uppercase text-ink">IPF classification preview</Text><Text className="mt-1 font-sans text-sm text-muted">{classification.ageDivision} · {classification.weightClass} · {equipment} · {experience}</Text><Text className="mt-1 font-sans text-xs text-muted">Open remains available from age 14; verify offered divisions with the meet organizer.</Text></View> : null}</> : null}
             {!isResettingPassword ? <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" editable={!Boolean(invitationToken)} /> : null}
             {!isForgotPassword ? <Field label={isResettingPassword ? "New password" : "Password"} value={password} onChangeText={setPassword} placeholder="At least 12 characters" secureTextEntry /> : null}
             {isRegistering || isResettingPassword ? <Field label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Repeat your password" secureTextEntry /> : null}
@@ -216,6 +230,10 @@ export function AuthScreen({ initialMode = "sign-in", invitationToken, resetToke
   );
 }
 
-function Field({ label, value, onChangeText, placeholder, secureTextEntry = false, keyboardType = "default", editable = true }: { label: string; value: string; onChangeText: (value: string) => void; placeholder: string; secureTextEntry?: boolean; keyboardType?: "default" | "email-address"; editable?: boolean }) {
+function Field({ label, value, onChangeText, placeholder, secureTextEntry = false, keyboardType = "default", editable = true }: { label: string; value: string; onChangeText: (value: string) => void; placeholder: string; secureTextEntry?: boolean; keyboardType?: "default" | "email-address" | "decimal-pad"; editable?: boolean }) {
   return <View><Text className="mb-1.5 font-heading text-xs uppercase text-muted">{label}</Text><TextInput className="min-h-12 border border-fog bg-canvas px-3 font-sans text-base text-ink" value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9B9B95" secureTextEntry={secureTextEntry} keyboardType={keyboardType} autoCapitalize="none" editable={editable} accessibilityLabel={label} /></View>;
+}
+
+function ChoiceField<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: T[]; onChange: (value: T) => void }) {
+  return <View><Text className="mb-1.5 font-heading text-xs uppercase text-muted">{label}</Text><View className="flex-row gap-2">{options.map((option) => <Pressable key={option} className={`min-h-11 flex-1 items-center justify-center border px-3 ${value === option ? "border-signal bg-signal/10" : "border-fog bg-canvas"}`} onPress={() => onChange(option)} accessibilityRole="radio" accessibilityState={{ selected: value === option }}><Text className="font-heading text-sm uppercase text-ink">{option}</Text></Pressable>)}</View></View>;
 }

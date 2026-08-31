@@ -1,9 +1,10 @@
 import { type ReactNode, useState } from "react";
 import { Modal, Pressable, Text, View, useWindowDimensions } from "react-native";
-import { BarChart3, BrainCircuit, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, Gauge, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
+import { BarChart3, Bell, BrainCircuit, ChevronDown, ClipboardCheck, ClipboardList, Dumbbell, Gauge, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users, X, type LucideIcon } from "lucide-react-native";
 import { Redirect, router, type Href, usePathname } from "expo-router";
 
 import { type PlatformRole, useSession } from "../auth/AuthSessionContext";
+import { useNotificationCenter } from "../notifications/NotificationCenterContext";
 import { useThemePreference } from "../theme/ThemePreferenceContext";
 
 interface NavigationItem {
@@ -160,6 +161,7 @@ export function AppShell({ title, children }: AppShellProps) {
   const { width } = useWindowDimensions();
   const { session, currentProfile } = useSession();
   const { theme } = useThemePreference();
+  const { unreadCount } = useNotificationCenter();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const isDesktop = width >= 960;
   const surfaceIconColor = theme === "dark" ? "#F5F7FB" : "#111827";
@@ -181,7 +183,7 @@ export function AppShell({ title, children }: AppShellProps) {
             ) : null}
             <View><Text className="font-serif text-xl font-bold text-ink">{title}</Text><Text className="font-serif text-xs text-muted">{session.role === "COACH" ? "Coach workspace" : "Athlete workspace"}</Text></View>
           </View>
-          <View className="flex-row items-center gap-2"><View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View><Text className="hidden font-serif text-sm font-bold text-ink sm:flex">{currentProfile.displayName}</Text></View>
+          <View className="flex-row items-center gap-2"><Pressable className="relative h-10 w-10 items-center justify-center border border-fog bg-canvas" onPress={() => router.push("/notifications")} accessibilityLabel={`Open notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}><Bell size={18} color={surfaceIconColor} />{unreadCount ? <View className="absolute -right-1 -top-1 min-w-5 items-center rounded-full bg-signal px-1 py-0.5"><Text className="font-mono text-[9px] text-white">{unreadCount > 99 ? "99+" : unreadCount}</Text></View> : null}</Pressable><View className="h-8 w-8 items-center justify-center rounded-md bg-moss"><Text className="font-serif text-xs font-bold text-white">{currentProfile.initials}</Text></View><Text className="hidden font-serif text-sm font-bold text-ink sm:flex">{currentProfile.displayName}</Text></View>
         </View>
         <View className="flex-1">{children}</View>
       </View>

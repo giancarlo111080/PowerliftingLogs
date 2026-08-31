@@ -10,12 +10,13 @@ using PowerliftingProgram.Infrastructure.Services;
 
 namespace PowerliftingProgram.Api.Controllers;
 
-public sealed record RegisterRequest(string DisplayName, string Email, string Password, string CountryCode, PlatformRole Role, string? InvitationToken);
+public sealed record RegisterRequest(string DisplayName, string Email, string Password, string CountryCode, PlatformRole Role, string? InvitationToken, DateOnly? DateOfBirth = null, AthleteSex? Sex = null, decimal? BodyWeightKg = null, PowerliftingExperience? Experience = null, PowerliftingEquipment? Equipment = null, string FederationCode = "IPF");
 public sealed record LoginRequest(string Email, string Password, string? InvitationToken = null);
 public sealed record RequestPasswordResetRequest(string Email);
 public sealed record CompletePasswordResetRequest(string Token, string Password);
 public sealed record PasswordResetRequestedResponse(string Message, string? ResetUrl = null);
-public sealed record AccountResponse(Guid Id, string DisplayName, string Email, string? CountryCode, PlatformRole Role, bool CanCoach, bool CanTrain, Guid? CoachId, string? CoachName, Guid? AthleteProfileId);
+public sealed record UpdateProfileRequest(string DisplayName, string? CountryCode, decimal? BodyWeightKg, string? CompetitionWeightClass, decimal? SquatOneRepMaxKg, decimal? BenchOneRepMaxKg, decimal? DeadliftOneRepMaxKg, string? UpcomingMeet, DateOnly? DateOfBirth = null, AthleteSex? Sex = null, PowerliftingExperience? Experience = null, PowerliftingEquipment? Equipment = null, string? FederationCode = null, string? CompetitionAgeDivision = null);
+public sealed record AccountResponse(Guid Id, string DisplayName, string Email, string? CountryCode, PlatformRole Role, bool CanCoach, bool CanTrain, Guid? CoachId, string? CoachName, Guid? AthleteProfileId, decimal? BodyWeightKg, string? CompetitionWeightClass, decimal? SquatOneRepMaxKg, decimal? BenchOneRepMaxKg, decimal? DeadliftOneRepMaxKg, string? UpcomingMeet, DateOnly? DateOfBirth, AthleteSex? Sex, PowerliftingExperience? Experience, PowerliftingEquipment? Equipment, string? FederationCode, string? CompetitionAgeDivision);
 public sealed record SessionResponse(string AccessToken, AccountResponse Account);
 public sealed record InvitationContextResponse(string CoachName, string RecipientEmail, DateTimeOffset ExpiresAt, bool ExistingAccount, CoachingRole Role, CoachingAccessLevel AccessLevel, bool IsPrimary);
 
@@ -88,8 +89,16 @@ public sealed class AuthenticationController(
             ExternalUserId = $"platform-{user.Id}",
             DisplayName = user.DisplayName,
             CountryCode = request.CountryCode.Trim().ToUpperInvariant(),
-            Sex = AthleteSex.PreferNotToSay,
-            CompetitionWeightClass = "Unspecified"
+            Sex = request.Sex ?? AthleteSex.PreferNotToSay,
+            DateOfBirth = request.DateOfBirth,
+            Experience = request.Experience ?? PowerliftingExperience.Novice,
+            Equipment = request.Equipment ?? PowerliftingEquipment.Classic,
+            FederationCode = request.FederationCode.Trim().ToUpperInvariant(),
+            CompetitionAgeDivision = request.DateOfBirth is null ? "Open" : IpfClassification.AgeDivision(request.DateOfBirth.Value, DateOnly.FromDateTime(DateTime.UtcNow)),
+            BodyWeightKg = request.BodyWeightKg ?? 0,
+            CompetitionWeightClass = request.Sex is AthleteSex.Female or AthleteSex.Male && request.BodyWeightKg > 0
+                ? IpfClassification.WeightClass(request.Sex.Value, request.BodyWeightKg.Value, request.DateOfBirth is not null && IpfClassification.IsYouthDivision(request.DateOfBirth.Value, DateOnly.FromDateTime(DateTime.UtcNow)))
+                : "Unspecified"
         };
         user.AthleteProfile = athleteProfile;
         database.AthleteProfiles.Add(athleteProfile);
@@ -292,6 +301,68 @@ public sealed class AuthenticationController(
     }
 
     [Authorize]
+    [HttpPatch("me")]
+    [ProducesResponseType(typeof(AccountResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AccountResponse>> UpdateProfile(UpdateProfileRequest request, CancellationToken cancellationToken)
+    {
+        var userId = CoachAccessService.CurrentUserId(User);
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
+        var user = await database.PlatformUsers.Include(candidate => candidate.AthleteProfile).Include(candidate => candidate.Coach)
+            .SingleOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
+        if (user is null)
+        {
+            return Unauthorized();
+        }
+
+        var displayName = request.DisplayName.Trim();
+        if (displayName.Length is 0 or > 120)
+        {
+            ModelState.AddModelError(nameof(request.DisplayName), "Display name is required and must be 120 characters or fewer.");
+            return ValidationProblem(ModelState);
+        }
+
+        user.DisplayName = displayName;
+        if (user.AthleteProfile is not null)
+        {
+            var profile = user.AthleteProfile;
+            var federationCode = request.FederationCode?.Trim().ToUpperInvariant() ?? profile.FederationCode;
+            var ageDivision = request.CompetitionAgeDivision?.Trim() ?? profile.CompetitionAgeDivision;
+            var weightClass = request.CompetitionWeightClass?.Trim() ?? profile.CompetitionWeightClass;
+            if (!string.Equals(federationCode, "IPF", StringComparison.OrdinalIgnoreCase))
+                ModelState.AddModelError(nameof(request.FederationCode), "Profile classification currently supports the IPF ruleset.");
+            if (!IpfClassification.IsEligibleAgeDivision(request.DateOfBirth ?? profile.DateOfBirth, ageDivision))
+                ModelState.AddModelError(nameof(request.CompetitionAgeDivision), "The selected age category is not available for this date of birth.");
+            if (!IpfClassification.IsWeightClass(request.Sex ?? profile.Sex, ageDivision, weightClass))
+                ModelState.AddModelError(nameof(request.CompetitionWeightClass), "Select a valid IPF weight class for this category.");
+            if (!ModelState.IsValid) return ValidationProblem(ModelState);
+
+            profile.DisplayName = displayName;
+            profile.CountryCode = string.IsNullOrWhiteSpace(request.CountryCode) ? null : request.CountryCode.Trim().ToUpperInvariant();
+            profile.BodyWeightKg = request.BodyWeightKg ?? profile.BodyWeightKg;
+            profile.DateOfBirth = request.DateOfBirth ?? profile.DateOfBirth;
+            profile.Sex = request.Sex ?? profile.Sex;
+            profile.Experience = request.Experience ?? profile.Experience;
+            profile.Equipment = request.Equipment ?? profile.Equipment;
+            profile.FederationCode = federationCode;
+            profile.CompetitionAgeDivision = ageDivision;
+            profile.CompetitionWeightClass = weightClass;
+            profile.SquatOneRepMaxKg = request.SquatOneRepMaxKg ?? profile.SquatOneRepMaxKg;
+            profile.BenchOneRepMaxKg = request.BenchOneRepMaxKg ?? profile.BenchOneRepMaxKg;
+            profile.DeadliftOneRepMaxKg = request.DeadliftOneRepMaxKg ?? profile.DeadliftOneRepMaxKg;
+            profile.UpcomingMeetIdentifier = string.IsNullOrWhiteSpace(request.UpcomingMeet) ? null : request.UpcomingMeet.Trim();
+            profile.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+        user.UpdatedAt = DateTimeOffset.UtcNow;
+        await database.SaveChangesAsync(cancellationToken);
+
+        return Ok(ToAccountResponse(user, user.AthleteProfile?.Id, await CanTrainAsync(user, cancellationToken)));
+    }
+
+    [Authorize]
     [HttpDelete("coach")]
     [ProducesResponseType(typeof(AccountResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -412,6 +483,22 @@ public sealed class AuthenticationController(
         {
             ModelState.AddModelError(nameof(request.Role), "Select a valid account role.");
         }
+        if (request.Role == PlatformRole.Athlete)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            if (request.DateOfBirth is null || request.DateOfBirth > today.AddYears(-14) || request.DateOfBirth < today.AddYears(-120))
+                ModelState.AddModelError(nameof(request.DateOfBirth), "Enter a valid date of birth. IPF classification begins in the calendar year the athlete turns 14.");
+            if (request.Sex is not AthleteSex.Female and not AthleteSex.Male)
+                ModelState.AddModelError(nameof(request.Sex), "Select the female or male IPF bodyweight classification.");
+            if (request.BodyWeightKg is null or <= 20 or > 500)
+                ModelState.AddModelError(nameof(request.BodyWeightKg), "Body weight must be between 20 and 500 kg.");
+            if (request.Experience is null || !Enum.IsDefined(request.Experience.Value))
+                ModelState.AddModelError(nameof(request.Experience), "Select your competition experience.");
+            if (request.Equipment is null || !Enum.IsDefined(request.Equipment.Value))
+                ModelState.AddModelError(nameof(request.Equipment), "Select Classic or Equipped powerlifting.");
+            if (!string.Equals(request.FederationCode?.Trim(), "IPF", StringComparison.OrdinalIgnoreCase))
+                ModelState.AddModelError(nameof(request.FederationCode), "Registration classification currently supports the IPF ruleset.");
+        }
         if (request.InvitationToken?.Length > 128)
         {
             ModelState.AddModelError(nameof(request.InvitationToken), "Invitation token is invalid.");
@@ -490,5 +577,48 @@ public sealed class AuthenticationController(
     }
 
     private static AccountResponse ToAccountResponse(PlatformUser user, Guid? athleteProfileId, bool canTrain) =>
-        new(user.Id, user.DisplayName, user.Email, user.AthleteProfile?.CountryCode, user.Role, user.CanCoach, canTrain, user.CoachId, user.Coach?.DisplayName, athleteProfileId);
+        new(user.Id, user.DisplayName, user.Email, user.AthleteProfile?.CountryCode, user.Role, user.CanCoach, canTrain, user.CoachId, user.Coach?.DisplayName, athleteProfileId,
+            user.AthleteProfile?.BodyWeightKg, user.AthleteProfile?.CompetitionWeightClass, user.AthleteProfile?.SquatOneRepMaxKg,
+            user.AthleteProfile?.BenchOneRepMaxKg, user.AthleteProfile?.DeadliftOneRepMaxKg, user.AthleteProfile?.UpcomingMeetIdentifier,
+            user.AthleteProfile?.DateOfBirth, user.AthleteProfile?.Sex, user.AthleteProfile?.Experience, user.AthleteProfile?.Equipment,
+            user.AthleteProfile?.FederationCode, user.AthleteProfile?.CompetitionAgeDivision);
+}
+
+internal static class IpfClassification
+{
+    private static readonly string[] AgeDivisions = ["Sub-Junior", "Junior", "Open", "Master I", "Master II", "Master III", "Master IV"];
+
+    public static string AgeDivision(DateOnly birthDate, DateOnly competitionDate)
+    {
+        var calendarAge = competitionDate.Year - birthDate.Year;
+        return calendarAge switch { <= 18 => "Sub-Junior", <= 23 => "Junior", >= 70 => "Master IV", >= 60 => "Master III", >= 50 => "Master II", >= 40 => "Master I", _ => "Open" };
+    }
+
+    public static bool IsYouthDivision(DateOnly birthDate, DateOnly competitionDate) => competitionDate.Year - birthDate.Year <= 23;
+
+    public static bool IsEligibleAgeDivision(DateOnly? birthDate, string division)
+    {
+        if (birthDate is null || !AgeDivisions.Contains(division)) return false;
+        var derived = AgeDivision(birthDate.Value, DateOnly.FromDateTime(DateTime.UtcNow));
+        return division == "Open" || division == derived;
+    }
+
+    public static bool IsWeightClass(AthleteSex sex, string division, string weightClass)
+    {
+        if (sex is not AthleteSex.Female and not AthleteSex.Male) return false;
+        var youth = division is "Sub-Junior" or "Junior";
+        var limits = sex == AthleteSex.Female
+            ? youth ? new[] { "43", "47", "52", "57", "63", "69", "76", "84", "84+" } : new[] { "47", "52", "57", "63", "69", "76", "84", "84+" }
+            : youth ? new[] { "53", "59", "66", "74", "83", "93", "105", "120", "120+" } : new[] { "59", "66", "74", "83", "93", "105", "120", "120+" };
+        return limits.Contains(weightClass);
+    }
+
+    public static string WeightClass(AthleteSex sex, decimal bodyWeightKg, bool youthDivision)
+    {
+        var limits = sex == AthleteSex.Female
+            ? youthDivision ? new decimal[] { 43, 47, 52, 57, 63, 69, 76, 84 } : new decimal[] { 47, 52, 57, 63, 69, 76, 84 }
+            : youthDivision ? new decimal[] { 53, 59, 66, 74, 83, 93, 105, 120 } : new decimal[] { 59, 66, 74, 83, 93, 105, 120 };
+        var limit = limits.FirstOrDefault(item => bodyWeightKg <= item);
+        return limit > 0 ? limit.ToString("0") : $"{limits[^1]:0}+";
+    }
 }

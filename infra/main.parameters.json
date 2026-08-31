@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "principalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "principalType": {
+      "value": "${AZURE_PRINCIPAL_TYPE=ServicePrincipal}"
+    },
+    "frontendOrigin": {
+      "value": "${FRONTEND_ORIGIN}"
+    },
+    "frontendBaseUrl": {
+      "value": "${FRONTEND_BASE_URL}"
+    },
+    "databaseConnectionString": {
+      "value": "${DATABASE_CONNECTION_STRING}"
+    },
+    "jwtSigningKey": {
+      "value": "${JWT_SIGNING_KEY}"
+    },
+    "resendApiKey": {
+      "value": "${RESEND_API_KEY}"
+    },
+    "verifiedSenderEmail": {
+      "value": "${VERIFIED_SENDER_EMAIL}"
+    }
+  }
+}

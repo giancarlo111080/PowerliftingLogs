@@ -4,6 +4,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 
 import { AuthSessionProvider } from "../src/auth/AuthSessionContext";
+import { NotificationCenterProvider } from "../src/notifications/NotificationCenterContext";
 import { ThemePreferenceProvider, useThemePreference } from "../src/theme/ThemePreferenceContext";
 
 function ApplicationLayout() {
@@ -21,7 +22,9 @@ export default function RootLayout() {
   return (
     <AuthSessionProvider>
       <ThemePreferenceProvider>
-        <ApplicationLayout />
+        <NotificationCenterProvider>
+          <ApplicationLayout />
+        </NotificationCenterProvider>
       </ThemePreferenceProvider>
     </AuthSessionProvider>
   );

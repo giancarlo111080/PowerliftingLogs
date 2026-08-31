@@ -28,6 +28,8 @@ public sealed class AthleteProfileConfiguration : IEntityTypeConfiguration<Athle
         builder.Property(profile => profile.ExternalUserId).HasMaxLength(128).IsRequired();
         builder.Property(profile => profile.DisplayName).HasMaxLength(120).IsRequired();
         builder.Property(profile => profile.CountryCode).HasMaxLength(2);
+        builder.Property(profile => profile.FederationCode).HasMaxLength(32).IsRequired();
+        builder.Property(profile => profile.CompetitionAgeDivision).HasMaxLength(32).IsRequired();
         builder.Property(profile => profile.CompetitionWeightClass).HasMaxLength(32).IsRequired();
         builder.Property(profile => profile.ActiveBlockTag).HasMaxLength(80);
         builder.Property(profile => profile.UpcomingMeetIdentifier).HasMaxLength(128);
@@ -185,6 +187,7 @@ public sealed class TrainingBlockConfiguration : IEntityTypeConfiguration<Traini
         builder.Property(block => block.Tag).HasMaxLength(80).IsRequired();
         builder.Property(block => block.Name).HasMaxLength(160).IsRequired();
         builder.HasIndex(block => new { block.AthleteProfileId, block.Tag }).IsUnique();
+        builder.HasIndex(block => new { block.AthleteProfileId, block.Status });
         builder.HasOne(block => block.AthleteProfile).WithMany(profile => profile.TrainingBlocks)
             .HasForeignKey(block => block.AthleteProfileId).OnDelete(DeleteBehavior.Cascade);
         builder.HasOne(block => block.Coach).WithMany().HasForeignKey(block => block.CoachId)

@@ -19,3 +19,8 @@ client/web-build/
 .DS_Store
 .vscode/
 .vs/
+
+# Azure Developer CLI
+.azure/*/
+!.azure/config.json
+!.azure/.env.template

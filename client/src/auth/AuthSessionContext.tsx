@@ -1,8 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from "react";
 import { Platform } from "react-native";
+import type { CompetitionSex, PowerliftingEquipment, PowerliftingExperience } from "../data/competitionClassification";
 
-import { acceptCoachInvitation, getCoachAthletes, getCurrentAccount, leaveCurrentCoach, registerAccount, signIn, type AccountResponse, type PlatformRole } from "../lib/platformApi";
+import { acceptCoachInvitation, getCoachAthletes, getCurrentAccount, leaveCurrentCoach, registerAccount, signIn, updateCurrentAccount, type AccountResponse, type PlatformRole } from "../lib/platformApi";
 
 export type { PlatformRole } from "../lib/platformApi";
 
@@ -16,9 +17,14 @@ export interface PlatformProfile {
   initials: string;
   email: string;
   countryCode?: string;
-  sex?: "Male" | "Female" | "Other";
+  sex?: "Male" | "Female";
   bodyWeightKg?: number;
   competitionWeightClass?: string;
+  dateOfBirth?: string;
+  competitionAgeDivision?: string;
+  experience?: PowerliftingExperience;
+  equipment?: PowerliftingEquipment;
+  federationCode?: string;
   squatOneRepMaxKg?: number;
   benchOneRepMaxKg?: number;
   deadliftOneRepMaxKg?: number;
@@ -45,7 +51,7 @@ interface AuthSessionContextValue {
   currentProfile: PlatformProfile | null;
   activeAthlete: PlatformProfile | null;
   login: (email: string, password: string, invitationToken?: string) => Promise<void>;
-  register: (input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string }) => Promise<void>;
+  register: (input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string; dateOfBirth?: string; sex?: CompetitionSex; bodyWeightKg?: number; experience?: PowerliftingExperience; equipment?: PowerliftingEquipment; federationCode?: string }) => Promise<void>;
   logout: () => Promise<void>;
   switchWorkspace: (role: PlatformRole) => Promise<void>;
   selectAthlete: (athleteProfileId: string) => Promise<void>;
@@ -120,7 +126,18 @@ function profileFromAccount(account: AccountResponse): PlatformProfile {
     initials: initials(account.displayName),
     email: account.email,
     countryCode: account.countryCode ?? undefined,
-    competitionWeightClass: "Unspecified",
+    sex: account.sex === "Female" || account.sex === "Male" ? account.sex : undefined,
+    bodyWeightKg: account.bodyWeightKg ?? undefined,
+    competitionWeightClass: account.competitionWeightClass ?? "Unspecified",
+    dateOfBirth: account.dateOfBirth ?? undefined,
+    competitionAgeDivision: account.competitionAgeDivision ?? undefined,
+    experience: account.experience ?? undefined,
+    equipment: account.equipment ?? undefined,
+    federationCode: account.federationCode ?? undefined,
+    squatOneRepMaxKg: account.squatOneRepMaxKg ?? undefined,
+    benchOneRepMaxKg: account.benchOneRepMaxKg ?? undefined,
+    deadliftOneRepMaxKg: account.deadliftOneRepMaxKg ?? undefined,
+    upcomingMeet: account.upcomingMeet ?? undefined,
     notificationsEnabled: true
   };
 }
@@ -143,8 +160,10 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     let isMounted = true;
     async function restore() {
       try {
-        const storedSession = await readStoredSession();
-        const storedProfiles = await AsyncStorage.getItem(profileStorageKey);
+        const [storedSession, storedProfiles] = await Promise.all([
+          readStoredSession(),
+          AsyncStorage.getItem(profileStorageKey)
+        ]);
         if (!isMounted || !storedSession) {
           return;
         }
@@ -152,6 +171,7 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
         if (!isSession(persistedSession)) {
           return;
         }
+        const stored = storedProfiles ? JSON.parse(storedProfiles) as PlatformProfile[] : [];
         const account = await getCurrentAccount(persistedSession.accessToken);
         const currentProfile = profileFromAccount(account);
         const preferredRole = normalizeRole(account.role);
@@ -168,7 +188,6 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
           catch {
           }
         }
-        const stored = storedProfiles ? JSON.parse(storedProfiles) as PlatformProfile[] : [];
         const nextProfiles = mergeProfiles(currentProfile, roster.map((athlete) => athleteProfile(athlete, account.id)), stored);
         if (isMounted) {
           const restoredCoachAthleteId = roster.some((athlete) => athlete.athleteProfileId === persistedSession.activeAthleteId)
@@ -180,6 +199,10 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
       }
       catch {
         await removeStoredSession();
+        if (isMounted) {
+          setSession(null);
+          setProfiles([]);
+        }
       }
       finally {
         if (isMounted) {
@@ -235,7 +258,7 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     await establish(response.account, response.accessToken);
   }
 
-  async function register(input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string }) {
+  async function register(input: { displayName: string; email: string; password: string; countryCode: string; role: PlatformRole; invitationToken?: string; dateOfBirth?: string; sex?: CompetitionSex; bodyWeightKg?: number; experience?: PowerliftingExperience; equipment?: PowerliftingEquipment; federationCode?: string }) {
     const response = await registerAccount(input);
     await establish(response.account, response.accessToken);
   }
@@ -279,7 +302,9 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     if (!currentProfile || !session) {
       return;
     }
-    const nextProfiles = profiles.map((profile) => profile.userId === session.userId ? { ...profile, ...changes, id: profile.id, userId: profile.userId, role: profile.role } : profile);
+    const account = await updateCurrentAccount(session.accessToken, { ...currentProfile, ...changes });
+    const persistedProfile = { ...currentProfile, ...profileFromAccount(account), ...changes, notificationsEnabled: changes.notificationsEnabled ?? currentProfile.notificationsEnabled };
+    const nextProfiles = profiles.map((profile) => profile.userId === session.userId ? persistedProfile : profile);
     await persist(session, nextProfiles);
   }
 

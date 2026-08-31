@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: powerlifting-logs
+metadata:
+  template: powerlifting-logs@0.0.1
+
+services:
+  api:
+    project: ./src/PowerliftingProgram.Api
+    language: dotnet
+    host: containerapp
+    docker:
+      path: ./src/PowerliftingProgram.Api/Dockerfile
+      context: .
+
+hooks:
+  preprovision:
+    posix:
+      shell: sh
+      run: echo "Validating Bicep templates..."
+    windows:
+      shell: pwsh
+      run: echo "Validating Bicep templates..."

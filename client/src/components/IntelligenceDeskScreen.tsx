@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useEffect, useState, type ComponentProps } from "react";
+import { Pressable, ScrollView, Text, TextInput as NativeTextInput, View } from "react-native";
 import { AlertTriangle, BookOpen, Check, Clock3, GitCompare, MessageSquare, ShieldAlert, Users, Video, X } from "lucide-react-native";
 import { Redirect } from "expo-router";
 
@@ -9,6 +9,7 @@ import { getProgramAnalytics } from "../data/programAnalytics";
 import { usePerformanceStore } from "../data/performanceStore";
 import { useProgramWorkspaceStore, type ExerciseCategory, type TrainingProgram } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
+import { DatePickerField } from "./DatePickerField";
 
 interface CoachException {
   key: string;
@@ -29,6 +30,17 @@ function deduplicateExceptions(items: CoachException[]) {
 
 function SectionTitle({ icon: Icon, eyebrow, title, count }: { icon: typeof AlertTriangle; eyebrow: string; title: string; count?: number }) {
   return <View className="mb-4 flex-row items-center gap-3"><View className="h-10 w-10 items-center justify-center bg-ink"><Icon size={19} color="#FF565E" /></View><View className="flex-1"><Text className="font-mono text-[10px] uppercase text-muted">{eyebrow}</Text><Text className="font-heading text-xl uppercase text-ink">{title}</Text></View>{count !== undefined ? <View className="min-w-8 items-center bg-signal px-2 py-1"><Text className="font-mono text-xs text-white">{count}</Text></View> : null}</View>;
+}
+
+function TextInput(props: ComponentProps<typeof NativeTextInput>) {
+  const { placeholder, value, onChangeText } = props;
+  if (placeholder === "Review date" && typeof value === "string" && onChangeText) {
+    return <DatePickerField label="Review date" value={value} onChangeText={onChangeText} placeholder="YYYY-MM-DD" containerClassName="w-40" inputClassName="font-sans text-base" labelClassName="font-mono text-muted" />;
+  }
+  if (placeholder === "Start YYYY-MM-DD" && typeof value === "string" && onChangeText) {
+    return <DatePickerField label="Start date" value={value} onChangeText={onChangeText} containerClassName="mt-2" inputClassName="font-sans text-base" labelClassName="font-mono text-muted" />;
+  }
+  return <NativeTextInput {...props} />;
 }
 
 function changedProgram(program: TrainingProgram, recommendation: AdaptiveRecommendation) {
@@ -104,7 +116,7 @@ export function IntelligenceDeskScreen() {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [bulkTemplateId, setBulkTemplateId] = useState<string | null>(null);
   const [bulkStartDate, setBulkStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [exerciseDraft, setExerciseDraft] = useState({ name: "", category: "accessory" as ExerciseCategory, sets: "3", repetitions: "10", prescriptionMode: "rpe" as "rpe" | "rir" | "percent" | "exact", prescriptionValue: "7", weightUnit: "kg" as "kg" | "lb", tags: "", notes: "" });
+  const [exerciseDraft, setExerciseDraft] = useState({ name: "", category: "accessory" as ExerciseCategory, sets: "3", repetitions: "10", prescriptionMode: "rir" as "rpe" | "rir" | "percent" | "exact", prescriptionValue: "2", weightUnit: "kg" as "kg" | "lb", tags: "", notes: "" });
   const [exceptionNote, setExceptionNote] = useState("");
   const [reviewingDecisionId, setReviewingDecisionId] = useState<string | null>(null);
   const [reviewOutcome, setReviewOutcome] = useState<"improved" | "neutral" | "worsened" | "inconclusive">("improved");
@@ -269,7 +281,7 @@ export function IntelligenceDeskScreen() {
     const prescriptionValue = Number(exerciseDraft.prescriptionValue);
     if (!exerciseDraft.name.trim() || !Number.isInteger(sets) || sets < 1 || !Number.isInteger(repetitions) || repetitions < 1 || !Number.isFinite(prescriptionValue) || prescriptionValue < 0) return setMessage("Enter an exercise name, positive whole-number sets/reps, and a valid target.");
     await performance.saveExerciseLibraryItem(athleteId, { coachId: currentProfile.id, name: exerciseDraft.name, category: exerciseDraft.category, sets, repetitions, prescriptionMode: exerciseDraft.prescriptionMode, prescriptionValue, weightUnit: exerciseDraft.weightUnit, tags: exerciseDraft.tags.split(","), ...(exerciseDraft.notes.trim() ? { notes: exerciseDraft.notes.trim() } : {}) });
-    setExerciseDraft({ name: "", category: "accessory", sets: "3", repetitions: "10", prescriptionMode: "rpe", prescriptionValue: "7", weightUnit: "kg", tags: "", notes: "" });
+    setExerciseDraft({ name: "", category: "accessory", sets: "3", repetitions: "10", prescriptionMode: "rir", prescriptionValue: "2", weightUnit: "kg", tags: "", notes: "" });
     setMessage("Exercise saved to the coach library.");
   }
 

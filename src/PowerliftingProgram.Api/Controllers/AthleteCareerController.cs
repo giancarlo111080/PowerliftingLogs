@@ -144,6 +144,7 @@ public sealed class AthleteCareerController(TrainingDbContext database, CoachAcc
                 item.StartsOn,
                 item.EndsOn,
                 item.IsActive,
+                item.Status,
                 item.CoachId,
                 CoachName = item.Coach?.DisplayName
             })

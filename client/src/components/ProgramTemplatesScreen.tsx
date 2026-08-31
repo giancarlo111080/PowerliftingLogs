@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View, Alert, Platform } from "react-native";
-import { ArrowRight, ClipboardList, Dumbbell, Layers3, Plus, Save, Users, X, Pencil, Trash2, Check } from "lucide-react-native";
+import { ArrowRight, Check, ChevronDown, ChevronRight, ClipboardCopy, ClipboardList, Dumbbell, Layers3, Pencil, Plus, Save, Share2, Trash2, Users, X } from "lucide-react-native";
 import { router } from "expo-router";
 
 import { useSession } from "../auth/AuthSessionContext";
@@ -14,6 +14,7 @@ import {
 } from "../data/programWorkspaceStore";
 import { AppShell } from "./AppShell";
 import { AccessoryExercisePicker } from "./AccessoryExercisePicker";
+import { DatePickerField } from "./DatePickerField";
 
 interface TemplateDraft extends ProgramTemplateInput {
   weeks: number;
@@ -81,10 +82,13 @@ export function ProgramTemplatesScreen() {
     createTemplate, 
     updateTemplate, 
     deleteTemplate,
+    shareTemplate,
     addTemplateWeek, 
+    duplicateTemplateWeek,
     updateTemplateWeek, 
     deleteTemplateWeek,
     addTemplateDay, 
+    duplicateTemplateDay,
     updateTemplateDay,
     deleteTemplateDay,
     addTemplateExercise, 
@@ -102,10 +106,15 @@ export function ProgramTemplatesScreen() {
   const [assignmentDate, setAssignmentDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedAthleteId, setSelectedAthleteId] = useState<string | null>(null);
   const [isAssignmentConfirmationOpen, setIsAssignmentConfirmationOpen] = useState(false);
+  const [isShareOpen, setIsShareOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState("");
+  const [isSharing, setIsSharing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const [inlineEditingId, setInlineEditingId] = useState<string | null>(null);
   const [titleBuffer, setTitleBuffer] = useState<string>("");
+  const [collapsedWeekIds, setCollapsedWeekIds] = useState<Set<string>>(() => new Set());
+  const [collapsedDayIds, setCollapsedDayIds] = useState<Set<string>>(() => new Set());
 
   const isCoach = session?.role === "COACH";
   const coachTemplates = templates.filter((template) => template.coachId === currentProfile?.userId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -189,8 +198,14 @@ export function ProgramTemplatesScreen() {
     // 2. Continuous Nested Week Filter Mutation
     function handleDeleteWeek(templateId: string, weekId: string, weekNumber: number) {
       confirmDeletion("Delete Week", `Delete Week ${weekNumber} and all its workouts?`, async () => {
-        await deleteTemplateWeek(templateId, weekId);
-        setMessage(`Week ${weekNumber} removed.`);
+        setMessage(`Removing Week ${weekNumber}...`);
+        try {
+          await deleteTemplateWeek(templateId, weekId);
+          setMessage(`Week ${weekNumber} removed.`);
+        }
+        catch (reason) {
+          setMessage(reason instanceof Error ? reason.message : `Could not remove Week ${weekNumber}.`);
+        }
       });
     }
 
@@ -230,9 +245,43 @@ export function ProgramTemplatesScreen() {
     }
   }
 
+  async function handleDuplicateWeek(templateId: string, weekId: string, weekNumber: number) {
+    try {
+      await duplicateTemplateWeek(templateId, weekId);
+      setMessage(`Week ${weekNumber} duplicated at the end of the program.`);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not duplicate this week.");
+    }
+  }
+
+  async function handleDuplicateDay(templateId: string, weekId: string, dayId: string, dayName: string) {
+    try {
+      await duplicateTemplateDay(templateId, weekId, dayId);
+      setMessage(`${dayName} duplicated at the end of this week.`);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not duplicate this training day.");
+    }
+  }
+
 async function triggerAddExercise(templateId: string, weekId: string, dayId: string, isPrimary: boolean) {
   const targetCategory: ExerciseCategory = isPrimary ? "squat" : "accessory";
-  await addTemplateExercise(templateId, weekId, dayId, targetCategory);
+  try {
+    await addTemplateExercise(templateId, weekId, dayId, targetCategory);
+  }
+  catch (reason) {
+    setMessage(reason instanceof Error ? reason.message : "Could not add this exercise.");
+  }
+}
+
+async function addExerciseCategory(templateId: string, weekId: string, dayId: string, category: ExerciseCategory) {
+  try {
+    await addTemplateExercise(templateId, weekId, dayId, category);
+  }
+  catch (reason) {
+    setMessage(reason instanceof Error ? reason.message : "Could not add this exercise.");
+  }
 }
   function assignSelectedTemplate() {
     if (!selectedTemplate || !assignmentAthleteId) {
@@ -263,12 +312,28 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
     try {
       const liveLog = await assignTemplate(selectedTemplate.id, assignmentAthleteId, assignmentDate);
       const athleteMatch = athletes.find((a) => a.id === assignmentAthleteId);
-      setMessage(`${liveLog.name} is now a live training log for ${athleteMatch?.displayName ?? "this athlete"}.`);
+      setMessage(`${liveLog.name} was sent to ${athleteMatch?.displayName ?? "this athlete"} for approval.`);
       setIsAssignmentConfirmationOpen(false);
-      router.push("/training");
     } catch (reason) {
       setIsAssignmentConfirmationOpen(false);
       setMessage(reason instanceof Error ? reason.message : "Could not assign this template.");
+    }
+  }
+
+  async function confirmTemplateShare() {
+    if (!selectedTemplate || !shareEmail.trim() || isSharing) return;
+    setIsSharing(true);
+    try {
+      await shareTemplate(selectedTemplate.id, shareEmail);
+      setMessage(`${selectedTemplate.name} was shared with ${shareEmail.trim()}. They received an independent copy.`);
+      setShareEmail("");
+      setIsShareOpen(false);
+    }
+    catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Could not share this template.");
+    }
+    finally {
+      setIsSharing(false);
     }
   }
 
@@ -288,6 +353,15 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
     setTitleBuffer(existingValue);
   }
 
+  function toggleCollapsed(setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) {
+    setter((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <AppShell title="Programs">
       <ScrollView className="flex-1" contentContainerClassName="mx-auto w-full max-w-6xl gap-7 px-4 py-6 pb-12" showsVerticalScrollIndicator={false}>
@@ -296,7 +370,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
           <View>
             <Text className="font-heading text-xs uppercase tracking-widest text-zinc">Coach programming</Text>
             <Text className="mt-2 font-heading text-3xl uppercase text-ink">Master programs</Text>
-            <Text className="mt-2 font-sans text-base leading-6 text-muted">Templates are reusable. Assigning one creates a separate live log for the athlete.</Text>
+            <Text className="mt-2 font-sans text-base leading-6 text-muted">Templates are reusable. Sending one creates an offer the athlete must approve.</Text>
           </View>
           <Pressable className="min-h-11 flex-row items-center justify-center gap-2 bg-signal px-4 py-3" onPress={() => openEditor()}>
             <Plus size={18} color="#F4F4ED" />
@@ -316,15 +390,30 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
               <Text className="font-heading text-xs uppercase tracking-widest text-moss">Confirm assignment</Text>
               <Text className="mt-2 font-heading text-2xl uppercase text-ink">Assign this program?</Text>
               <Text className="mt-3 font-sans text-sm leading-6 text-muted">
-                {selectedTemplate?.name ?? "This template"} will become the active live training log for {athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "the selected athlete"}, starting {assignmentDate}.
+                {selectedTemplate?.name ?? "This template"} will be sent to {athletes.find((athlete) => athlete.id === assignmentAthleteId)?.displayName ?? "the selected athlete"} for approval, starting {assignmentDate}. Their current training stays active until they accept.
               </Text>
               <View className="mt-5 flex-row justify-end gap-2">
                 <Pressable className="min-h-11 border border-fog px-4 py-3" onPress={() => setIsAssignmentConfirmationOpen(false)}>
                   <Text className="font-heading text-sm uppercase text-ink">Cancel</Text>
                 </Pressable>
                 <Pressable className="min-h-11 bg-signal px-4 py-3" onPress={() => void confirmTemplateAssignment()}>
-                  <Text className="font-heading text-sm uppercase text-white">Assign program</Text>
+                  <Text className="font-heading text-sm uppercase text-white">Send for approval</Text>
                 </Pressable>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal transparent animationType="fade" visible={isShareOpen} onRequestClose={() => setIsShareOpen(false)}>
+          <View className="flex-1 items-center justify-center bg-black/60 px-5">
+            <View className="w-full max-w-md border border-fog bg-paper p-5">
+              <Text className="font-heading text-xs uppercase tracking-widest text-moss">Share master program</Text>
+              <Text className="mt-2 font-heading text-2xl uppercase text-ink">Send an independent copy</Text>
+              <Text className="mt-3 font-sans text-sm leading-6 text-muted">The recipient can edit and assign their copy without changing your template or existing athlete logs.</Text>
+              <TextInput className="mt-4 min-h-11 border border-fog bg-canvas px-3 font-sans text-sm text-ink" value={shareEmail} onChangeText={setShareEmail} placeholder="Coach email address" placeholderTextColor="#71717A" keyboardType="email-address" autoCapitalize="none" accessibilityLabel="Recipient coach email" />
+              <View className="mt-5 flex-row justify-end gap-2">
+                <Pressable className="min-h-11 border border-fog px-4 py-3" onPress={() => setIsShareOpen(false)} disabled={isSharing}><Text className="font-heading text-sm uppercase text-ink">Cancel</Text></Pressable>
+                <Pressable className="min-h-11 flex-row items-center gap-2 bg-signal px-4 py-3 disabled:opacity-40" onPress={() => void confirmTemplateShare()} disabled={!shareEmail.trim() || isSharing}><Share2 size={16} color="#F4F4ED" /><Text className="font-heading text-sm uppercase text-white">{isSharing ? "Sharing" : "Share copy"}</Text></Pressable>
               </View>
             </View>
           </View>
@@ -390,6 +479,10 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                       <Text className="mt-3 font-mono text-xs text-zinc">{selectedTemplate.phase.toUpperCase()} · MASTER TEMPLATE · {selectedTemplate.weeks.length} WEEKS</Text>
                     </View>
                     <View className="flex-row gap-2 mt-2 sm:mt-0">
+                      <Pressable className="min-h-10 flex-row items-center justify-center gap-2 border border-fog px-3 py-2" onPress={() => { setShareEmail(""); setIsShareOpen(true); }}>
+                        <Share2 size={16} color="#F4F4ED" />
+                        <Text className="font-heading text-sm uppercase text-ink">Share</Text>
+                      </Pressable>
                       <Pressable className="min-h-10 flex-row items-center justify-center gap-2 border border-fog px-3 py-2" onPress={() => openEditor(selectedTemplate)}>
                         <ClipboardList size={16} color="#F4F4ED" />
                         <Text className="font-heading text-sm uppercase text-ink">Edit details</Text>
@@ -407,7 +500,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                     <Users size={20} color="#CCFF00" />
                     <View>
                       <Text className="font-heading text-lg uppercase text-ink">Assign to athlete</Text>
-                      <Text className="mt-1 font-sans text-sm text-muted">Creates a separate live training log. Template edits never change active assignments.</Text>
+                      <Text className="mt-1 font-sans text-sm text-muted">Sends a program offer. It becomes a training log only after the athlete accepts.</Text>
                     </View>
                   </View>
                   <View className="mt-4 flex-col gap-3 lg:flex-row lg:items-end">
@@ -422,7 +515,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                       </ScrollView>
                     </View>
                     <View className="w-full lg:w-48">
-                      <Field label="Start date" value={assignmentDate} onChangeText={setAssignmentDate} placeholder="YYYY-MM-DD" />
+                      <DatePickerField label="Start date" value={assignmentDate} onChangeText={setAssignmentDate} containerClassName="w-full" inputClassName="rounded py-2 font-sans text-sm" labelClassName="font-heading tracking-wider text-muted" />
                     </View>
                     <Pressable className="min-h-12 flex-row items-center justify-center gap-2 bg-signal px-4 py-3" onPress={() => void assignSelectedTemplate()}>
                       <ArrowRight size={18} color="#F4F4ED" />
@@ -435,6 +528,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                 <View className="gap-4">
                   {[...selectedTemplate.weeks].sort((left, right) => left.weekNumber - right.weekNumber).map((week) => { 
                     const dayDraft = dayDrafts[week.id] ?? { name: "", focus: "" }; 
+                    const isWeekCollapsed = collapsedWeekIds.has(week.id);
                     return (
                       <View key={week.id} className="border border-fog bg-paper">
                         
@@ -466,6 +560,12 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                             )}
                           </View>
                           <View className="flex-row items-center gap-2">
+                            <Pressable className="p-2 border border-fog bg-paper rounded active:bg-zinc/10" onPress={() => toggleCollapsed(setCollapsedWeekIds, week.id)} accessibilityLabel={`${isWeekCollapsed ? "Expand" : "Collapse"} week ${week.weekNumber}`} accessibilityState={{ expanded: !isWeekCollapsed }}>
+                              {isWeekCollapsed ? <ChevronRight size={14} color="#A1A1AA" /> : <ChevronDown size={14} color="#A1A1AA" />}
+                            </Pressable>
+                            <Pressable disabled={selectedTemplate.weeks.length >= 52} className="p-2 border border-fog bg-paper rounded active:bg-zinc/10 disabled:opacity-40" onPress={() => void handleDuplicateWeek(selectedTemplate.id, week.id, week.weekNumber)} accessibilityLabel={`Duplicate week ${week.weekNumber}`}>
+                              <ClipboardCopy size={14} color="#A1A1AA" />
+                            </Pressable>
                             <Pressable className="p-2 border border-fog bg-paper rounded active:bg-zinc/10" onPress={() => startInlineTitleEditing(week.id, week.name)}>
                               <Pencil size={14} color="#A1A1AA" />
                             </Pressable>
@@ -475,7 +575,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                           </View>
                         </View>
 
-                        <View className="p-4 gap-4">
+                        {!isWeekCollapsed ? <View className="p-4 gap-4">
                           {week.days?.map((day) => (
                             <View key={day.id} className="border border-fog bg-canvas p-3 rounded">
                               
@@ -501,10 +601,16 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                                       </Pressable>
                                     </View>
                                   ) : (
-                                    <Text className="font-heading text-base uppercase text-ink">{day.name} <Text className="font-sans text-xs text-muted normal-case font-normal">({day.focus})</Text></Text>
+                                    <Text className="font-heading text-base uppercase text-ink">{day.name}{day.focus.trim() ? <Text className="font-sans text-xs text-muted normal-case font-normal"> ({day.focus})</Text> : null}</Text>
                                   )}
                                 </View>
                                 <View className="flex-row items-center gap-1.5">
+                                  <Pressable className="p-1.5 border border-fog bg-paper rounded" onPress={() => toggleCollapsed(setCollapsedDayIds, day.id)} accessibilityLabel={`${collapsedDayIds.has(day.id) ? "Expand" : "Collapse"} ${day.name}`} accessibilityState={{ expanded: !collapsedDayIds.has(day.id) }}>
+                                    {collapsedDayIds.has(day.id) ? <ChevronRight size={12} color="#A1A1AA" /> : <ChevronDown size={12} color="#A1A1AA" />}
+                                  </Pressable>
+                                  <Pressable disabled={week.days.length >= 7} className="p-1.5 border border-fog bg-paper rounded disabled:opacity-40" onPress={() => void handleDuplicateDay(selectedTemplate.id, week.id, day.id, day.name)} accessibilityLabel={`Duplicate ${day.name}`}>
+                                    <ClipboardCopy size={12} color="#A1A1AA" />
+                                  </Pressable>
                                   <Pressable className="p-1.5 border border-fog bg-paper rounded" onPress={() => startInlineTitleEditing(day.id, day.name)}>
                                     <Pencil size={12} color="#A1A1AA" />
                                   </Pressable>
@@ -514,6 +620,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                                 </View>
                               </View>
 
+                              {!collapsedDayIds.has(day.id) ? <>
                               <View className="gap-2 mb-3">
                                 {day.exercises?.map((exercise) => (
                                   <View key={exercise.id} className="bg-paper p-2.5 border border-fog rounded">
@@ -568,33 +675,35 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                               <View className="flex-row flex-wrap gap-2 mt-2">
                                 <Pressable 
                                   className="flex-1 min-w-[70px] flex-row items-center justify-center gap-1 bg-signal/10 border border-signal/40 py-2 rounded active:bg-signal/20"
-                                  onPress={() => void addTemplateExercise(selectedTemplate.id, week.id, day.id, "squat")}
+                                  onPress={() => void addExerciseCategory(selectedTemplate.id, week.id, day.id, "squat")}
                                 >
                                   <Dumbbell size={11} color="#CCFF00" />
                                   <Text className="font-heading text-[10px] uppercase text-ink">Squat</Text>
                                 </Pressable>
                                 <Pressable 
                                   className="flex-1 min-w-[70px] flex-row items-center justify-center gap-1 bg-signal/10 border border-signal/40 py-2 rounded active:bg-signal/20"
-                                  onPress={() => void addTemplateExercise(selectedTemplate.id, week.id, day.id, "bench")}
+                                  onPress={() => void addExerciseCategory(selectedTemplate.id, week.id, day.id, "bench")}
                                 >
                                   <Dumbbell size={11} color="#CCFF00" />
                                   <Text className="font-heading text-[10px] uppercase text-ink">Bench</Text>
                                 </Pressable>
                                 <Pressable 
                                   className="flex-1 min-w-[70px] flex-row items-center justify-center gap-1 bg-signal/10 border border-signal/40 py-2 rounded active:bg-signal/20"
-                                  onPress={() => void addTemplateExercise(selectedTemplate.id, week.id, day.id, "deadlift")}
+                                  onPress={() => void addExerciseCategory(selectedTemplate.id, week.id, day.id, "deadlift")}
                                 >
                                   <Dumbbell size={11} color="#CCFF00" />
                                   <Text className="font-heading text-[10px] uppercase text-ink">Deadlift</Text>
                                 </Pressable>
                                 <Pressable 
                                   className="flex-1 min-w-[70px] flex-row items-center justify-center gap-1 bg-zinc/10 border border-zinc/40 py-2 rounded active:bg-zinc/20"
-                                  onPress={() => void addTemplateExercise(selectedTemplate.id, week.id, day.id, "accessory")}
+                                  onPress={() => void addExerciseCategory(selectedTemplate.id, week.id, day.id, "accessory")}
                                 >
                                   <Plus size={11} color="#A1A1AA" />
                                   <Text className="font-heading text-[10px] uppercase text-muted">Accessory</Text>
                                 </Pressable>
                               </View>
+
+                              </> : null}
 
                             </View>
                           ))}
@@ -622,7 +731,7 @@ async function triggerAddExercise(templateId: string, weekId: string, dayId: str
                             </View>
                           </View>}
 
-                        </View>
+                        </View> : null}
                       </View>
                     ); 
                   })}

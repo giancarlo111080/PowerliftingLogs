@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using PowerliftingProgram.Domain.Entities;
 using PowerliftingProgram.Infrastructure.Persistence;
 using PowerliftingProgram.Infrastructure.Services;
@@ -20,6 +21,7 @@ public sealed record TemplateExerciseInput(
 public sealed record TemplateDayInput(int DayNumber, string Name, string Focus, IReadOnlyList<TemplateExerciseInput> Exercises);
 public sealed record TemplateWeekInput(int WeekNumber, string Name, IReadOnlyList<TemplateDayInput> Days);
 public sealed record ProgramTemplateInput(string Name, string Goal, string? Phase, int TrainingDaysPerWeek, IReadOnlyList<TemplateWeekInput> Weeks);
+public sealed record ShareProgramTemplateRequest(string RecipientEmail);
 public sealed record AssignTemplateRequest(Guid AthleteProfileId, DateOnly StartDate);
 public sealed record LiveExerciseUpdate(Guid ExerciseId, string Name, ExerciseType ExerciseType, int Sets, int Repetitions, TemplatePrescriptionMode PrescriptionMode, decimal PrescriptionValue, string WeightUnit);
 public sealed record LiveTrainingDayUpdate(string Name, string Focus, DateOnly ScheduledFor, IReadOnlyList<LiveExerciseUpdate> Exercises);
@@ -27,7 +29,7 @@ public sealed record ProgramTemplateExerciseResponse(Guid Id, int SortOrder, str
 public sealed record ProgramTemplateDayResponse(Guid Id, int DayNumber, string Name, string Focus, IReadOnlyList<ProgramTemplateExerciseResponse> Exercises);
 public sealed record ProgramTemplateWeekResponse(Guid Id, int WeekNumber, string Name, IReadOnlyList<ProgramTemplateDayResponse> Days);
 public sealed record ProgramTemplateResponse(Guid Id, string Name, string Goal, string? Phase, int TrainingDaysPerWeek, DateTimeOffset UpdatedAt, IReadOnlyList<ProgramTemplateWeekResponse> Weeks);
-public sealed record LiveTrainingBlockResponse(Guid Id, Guid AthleteProfileId, Guid ProgramTemplateId, string Name, DateOnly StartsOn, DateOnly EndsOn);
+public sealed record LiveTrainingBlockResponse(Guid Id, Guid AthleteProfileId, Guid ProgramTemplateId, string Name, DateOnly StartsOn, DateOnly EndsOn, TrainingBlockStatus Status);
 
 [Authorize(Roles = "COACH")]
 [ApiController]
@@ -116,13 +118,53 @@ public sealed class ProgramTemplatesController(
             return NotFound();
         }
 
-        database.ProgramTemplateExercises.RemoveRange(template.Weeks.SelectMany(week => week.Days).SelectMany(day => day.Exercises));
-        database.ProgramTemplateDays.RemoveRange(template.Weeks.SelectMany(week => week.Days));
-        database.ProgramTemplateWeeks.RemoveRange(template.Weeks);
-        template.Weeks.Clear();
-        ApplyTemplateInput(template, input);
-        await database.SaveChangesAsync(cancellationToken);
-        return NoContent();
+        IDbContextTransaction? transaction = null;
+        try
+        {
+            if (database.Database.IsRelational())
+            {
+                transaction = await database.Database.BeginTransactionAsync(cancellationToken);
+            }
+
+            if (database.Database.IsRelational())
+            {
+                await database.ProgramTemplateExercises
+                    .Where(exercise => exercise.ProgramTemplateDay!.ProgramTemplateWeek!.ProgramTemplateId == template.Id)
+                    .ExecuteDeleteAsync(cancellationToken);
+                await database.ProgramTemplateDays
+                    .Where(day => day.ProgramTemplateWeek!.ProgramTemplateId == template.Id)
+                    .ExecuteDeleteAsync(cancellationToken);
+                await database.ProgramTemplateWeeks
+                    .Where(week => week.ProgramTemplateId == template.Id)
+                    .ExecuteDeleteAsync(cancellationToken);
+                database.ChangeTracker.Clear();
+                template = await database.ProgramTemplates.SingleAsync(candidate => candidate.Id == templateId && candidate.CoachId == coachId, cancellationToken);
+            }
+            else
+            {
+                database.ProgramTemplateExercises.RemoveRange(template.Weeks.SelectMany(week => week.Days).SelectMany(day => day.Exercises));
+                database.ProgramTemplateDays.RemoveRange(template.Weeks.SelectMany(week => week.Days));
+                database.ProgramTemplateWeeks.RemoveRange(template.Weeks);
+                template.Weeks.Clear();
+                await database.SaveChangesAsync(cancellationToken);
+            }
+
+            ApplyTemplateInput(template, input);
+            database.ProgramTemplateWeeks.AddRange(template.Weeks);
+            await database.SaveChangesAsync(cancellationToken);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+            return NoContent();
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
+        }
     }
 
     [HttpDelete("{templateId:guid}")]
@@ -143,6 +185,72 @@ public sealed class ProgramTemplatesController(
         database.ProgramTemplates.Remove(template);
         await database.SaveChangesAsync(cancellationToken);
         return NoContent();
+    }
+
+    [HttpPost("{templateId:guid}/shares")]
+    [ProducesResponseType(typeof(ProgramTemplateResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ProgramTemplateResponse>> ShareTemplate(Guid templateId, [FromBody] ShareProgramTemplateRequest request, CancellationToken cancellationToken)
+    {
+        var coachId = CoachAccessService.CurrentUserId(User);
+        if (coachId is null)
+        {
+            return Unauthorized();
+        }
+        if (string.IsNullOrWhiteSpace(request.RecipientEmail))
+        {
+            return BadRequest(new ProblemDetails { Title = "Enter the recipient coach's email address." });
+        }
+
+        var source = await TemplateQuery().AsNoTracking()
+            .SingleOrDefaultAsync(template => template.Id == templateId && template.CoachId == coachId, cancellationToken);
+        if (source is null)
+        {
+            return NotFound();
+        }
+        var normalizedEmail = request.RecipientEmail.Trim().ToUpperInvariant();
+        var recipient = await database.PlatformUsers.AsNoTracking()
+            .SingleOrDefaultAsync(user => user.NormalizedEmail == normalizedEmail && user.CanCoach, cancellationToken);
+        if (recipient is null)
+        {
+            return BadRequest(new ProblemDetails { Title = "No coach account uses that email address." });
+        }
+        if (recipient.Id == coachId)
+        {
+            return BadRequest(new ProblemDetails { Title = "Choose another coach. You already own this template." });
+        }
+
+        var existingNames = await database.ProgramTemplates.AsNoTracking()
+            .Where(template => template.CoachId == recipient.Id && template.Name.StartsWith(source.Name))
+            .Select(template => template.Name)
+            .ToListAsync(cancellationToken);
+        var sharedName = source.Name;
+        for (var copyNumber = 2; existingNames.Contains(sharedName); copyNumber++)
+        {
+            var suffix = $" (Shared {copyNumber})";
+            sharedName = $"{source.Name[..Math.Min(source.Name.Length, 160 - suffix.Length)]}{suffix}";
+        }
+
+        var copy = BuildTemplate(new ProgramTemplateInput(
+            sharedName,
+            source.Goal,
+            source.Phase,
+            source.TrainingDaysPerWeek,
+            source.Weeks.OrderBy(week => week.WeekNumber).Select(week => new TemplateWeekInput(
+                week.WeekNumber,
+                week.Name,
+                week.Days.OrderBy(day => day.DayNumber).Select(day => new TemplateDayInput(
+                    day.DayNumber,
+                    day.Name,
+                    day.Focus,
+                    day.Exercises.OrderBy(exercise => exercise.SortOrder).Select(exercise => new TemplateExerciseInput(
+                        exercise.SortOrder, exercise.Name, exercise.ExerciseType, exercise.Sets, exercise.Repetitions,
+                        exercise.PrescriptionMode, exercise.PrescriptionValue, exercise.WeightUnit)).ToList())).ToList())).ToList()),
+            recipient.Id);
+        database.ProgramTemplates.Add(copy);
+        await database.SaveChangesAsync(cancellationToken);
+        return CreatedAtAction(nameof(GetTemplate), new { templateId = copy.Id }, ToResponse(copy));
     }
 
     [HttpPost("{templateId:guid}/assignments")]
@@ -167,11 +275,6 @@ public sealed class ProgramTemplatesController(
         }
 
         var athlete = await database.AthleteProfiles.SingleAsync(profile => profile.Id == request.AthleteProfileId, cancellationToken);
-        var existingActiveBlocks = await database.TrainingBlocks
-            .Where(block => block.AthleteProfileId == athlete.Id && block.IsActive)
-            .ToListAsync(cancellationToken);
-        existingActiveBlocks.ForEach(block => block.IsActive = false);
-
         var finalDate = request.StartDate;
         var block = new TrainingBlock
         {
@@ -182,7 +285,8 @@ public sealed class ProgramTemplatesController(
             Name = template.Name,
             StartsOn = request.StartDate,
             EndsOn = request.StartDate,
-            IsActive = true
+            IsActive = false,
+            Status = TrainingBlockStatus.Pending
         };
         foreach (var templateWeek in template.Weeks.OrderBy(week => week.WeekNumber))
         {
@@ -217,7 +321,7 @@ public sealed class ProgramTemplatesController(
         block.EndsOn = finalDate;
         database.TrainingBlocks.Add(block);
         await database.SaveChangesAsync(cancellationToken);
-        return Created($"/api/live-training/blocks/{block.Id}", new LiveTrainingBlockResponse(block.Id, athlete.Id, template.Id, block.Name, block.StartsOn, block.EndsOn));
+        return Created($"/api/live-training/offers/{block.Id}", new LiveTrainingBlockResponse(block.Id, athlete.Id, template.Id, block.Name, block.StartsOn, block.EndsOn, block.Status));
     }
 
     [HttpPut("/api/live-training/days/{trainingDayId:guid}")]
@@ -281,8 +385,120 @@ public sealed class ProgramTemplatesController(
         return NoContent();
     }
 
+    [HttpPost("/api/live-training/weeks/{trainingWeekId:guid}/duplicate")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DuplicateLiveTrainingWeek(Guid trainingWeekId, CancellationToken cancellationToken)
+    {
+        var coachId = CoachAccessService.CurrentUserId(User);
+        if (coachId is null)
+        {
+            return Unauthorized();
+        }
+        var source = await database.TrainingWeeks
+            .Include(week => week.TrainingBlock).ThenInclude(block => block!.Weeks)
+            .Include(week => week.Days).ThenInclude(day => day.Exercises).ThenInclude(exercise => exercise.Sets)
+            .SingleOrDefaultAsync(week => week.Id == trainingWeekId, cancellationToken);
+        if (source?.TrainingBlock?.CoachId != coachId || !source.TrainingBlock.IsActive || source.TrainingBlock.Status != TrainingBlockStatus.Accepted)
+        {
+            return source is null ? NotFound() : Forbid();
+        }
+        if (source.TrainingBlock.Weeks.Count >= MaxTemplateWeeks)
+        {
+            return BadRequest(new ProblemDetails { Title = $"A live program cannot contain more than {MaxTemplateWeeks} weeks." });
+        }
+
+        var weekNumber = source.TrainingBlock.Weeks.Max(week => week.WeekNumber) + 1;
+        var dateOffset = (weekNumber - source.WeekNumber) * 7;
+        var duplicate = new TrainingWeek
+        {
+            WeekNumber = weekNumber,
+            StartsOn = source.StartsOn.AddDays(dateOffset)
+        };
+        foreach (var day in source.Days.OrderBy(day => day.ScheduledFor))
+        {
+            duplicate.Days.Add(CloneLiveDay(day, day.ScheduledFor.AddDays(dateOffset)));
+        }
+        source.TrainingBlock.Weeks.Add(duplicate);
+        source.TrainingBlock.EndsOn = MaxDate(source.TrainingBlock.EndsOn, duplicate.Days.Select(day => day.ScheduledFor).DefaultIfEmpty(duplicate.StartsOn).Max());
+        source.TrainingBlock.UpdatedAt = DateTimeOffset.UtcNow;
+        await database.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("/api/live-training/days/{trainingDayId:guid}/duplicate")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DuplicateLiveTrainingDay(Guid trainingDayId, CancellationToken cancellationToken)
+    {
+        var coachId = CoachAccessService.CurrentUserId(User);
+        if (coachId is null)
+        {
+            return Unauthorized();
+        }
+        var source = await database.TrainingDays
+            .Include(day => day.TrainingWeek).ThenInclude(week => week!.TrainingBlock)
+            .Include(day => day.TrainingWeek).ThenInclude(week => week!.Days)
+            .Include(day => day.Exercises).ThenInclude(exercise => exercise.Sets)
+            .SingleOrDefaultAsync(day => day.Id == trainingDayId, cancellationToken);
+        if (source?.TrainingWeek?.TrainingBlock?.CoachId != coachId || !source.TrainingWeek.TrainingBlock.IsActive || source.TrainingWeek.TrainingBlock.Status != TrainingBlockStatus.Accepted)
+        {
+            return source is null ? NotFound() : Forbid();
+        }
+        if (source.TrainingWeek.Days.Count >= MaxDaysPerWeek)
+        {
+            return BadRequest(new ProblemDetails { Title = $"A training week cannot contain more than {MaxDaysPerWeek} days." });
+        }
+
+        var scheduledFor = source.TrainingWeek.Days.Max(day => day.ScheduledFor).AddDays(1);
+        var duplicate = CloneLiveDay(source, scheduledFor);
+        source.TrainingWeek.Days.Add(duplicate);
+        source.TrainingWeek.TrainingBlock.EndsOn = MaxDate(source.TrainingWeek.TrainingBlock.EndsOn, scheduledFor);
+        source.TrainingWeek.TrainingBlock.UpdatedAt = DateTimeOffset.UtcNow;
+        await database.SaveChangesAsync(cancellationToken);
+        return NoContent();
+    }
+
     private IQueryable<ProgramTemplate> TemplateQuery() => database.ProgramTemplates
         .Include(template => template.Weeks).ThenInclude(week => week.Days).ThenInclude(day => day.Exercises);
+
+    private static TrainingDay CloneLiveDay(TrainingDay source, DateOnly scheduledFor)
+    {
+        var duplicate = new TrainingDay { Name = source.Name, Focus = source.Focus, ScheduledFor = scheduledFor };
+        foreach (var exercise in source.Exercises.OrderBy(exercise => exercise.SortOrder))
+        {
+            var exerciseCopy = new PrescribedExercise
+            {
+                Name = exercise.Name,
+                ExerciseType = exercise.ExerciseType,
+                ExerciseTypeModifier = exercise.ExerciseTypeModifier,
+                SortOrder = exercise.SortOrder,
+                PrescriptionMode = exercise.PrescriptionMode,
+                PrescriptionValue = exercise.PrescriptionValue,
+                WeightUnit = exercise.WeightUnit,
+                TargetEstimatedOneRepMaxKg = exercise.TargetEstimatedOneRepMaxKg
+            };
+            foreach (var set in exercise.Sets.OrderBy(set => set.SetNumber))
+            {
+                exerciseCopy.Sets.Add(new TrainingSet
+                {
+                    SetNumber = set.SetNumber,
+                    Intent = set.Intent,
+                    TargetRepetitions = set.TargetRepetitions,
+                    TargetLoadKg = set.TargetLoadKg,
+                    TargetRpe = set.TargetRpe,
+                    TargetEstimatedOneRepMaxKg = set.TargetEstimatedOneRepMaxKg,
+                    CompletionStatus = SetCompletionStatus.Pending
+                });
+            }
+            duplicate.Exercises.Add(exerciseCopy);
+        }
+        return duplicate;
+    }
+
+    private static DateOnly MaxDate(DateOnly left, DateOnly right) => left >= right ? left : right;
 
     private static ProgramTemplateResponse ToResponse(ProgramTemplate template) => new(
         template.Id,

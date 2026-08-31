@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { useEffect, useState, type ComponentProps } from "react";
+import { Pressable, Text, TextInput as NativeTextInput, View } from "react-native";
 import { CalendarClock, Check, CircleCheck, CircleX, Scale, Trophy } from "lucide-react-native";
 
 import { generateWarmUps, type StrengthProjection } from "../data/adaptiveEngine";
 import { attemptRiskBand, federationRule, federationRules, formatCountdown, fromKilograms, isRulesCacheStale, roundDisplayWeight, toKilograms, type MeetWeightUnit, validateAttemptSeries } from "../data/meetRules";
 import { usePerformanceStore, type MeetPlan } from "../data/performanceStore";
 import type { PrimaryLift } from "../lib/liftAnalysis";
+import { DatePickerField } from "./DatePickerField";
 
 const lifts: PrimaryLift[] = ["squat", "bench", "deadlift"];
 const checklistItems = ["Photo ID", "Membership card", "Singlet", "Belt", "Shoes", "Knee sleeves", "Wrist wraps", "Deadlift socks", "Rack heights", "Opening attempts"];
@@ -19,6 +20,20 @@ interface MeetDayCommandCenterProps {
 
 function SectionTitle({ icon: Icon, eyebrow, title }: { icon: typeof Trophy; eyebrow: string; title: string }) {
   return <View className="mb-4 flex-row items-center gap-3"><View className="h-10 w-10 items-center justify-center bg-ink"><Icon size={19} color="#FF565E" /></View><View className="flex-1"><Text className="font-mono text-[10px] uppercase text-muted">{eyebrow}</Text><Text className="font-heading text-xl uppercase text-ink">{title}</Text></View></View>;
+}
+
+function TextInput(props: ComponentProps<typeof NativeTextInput>) {
+  const { placeholder, value, onChangeText } = props;
+  if (placeholder === "Meet YYYY-MM-DD" && typeof value === "string" && onChangeText) {
+    return <DatePickerField label="Meet date" value={value} onChangeText={onChangeText} placeholder="Meet YYYY-MM-DD" containerClassName="min-w-40 flex-1" inputClassName="font-sans text-base" labelClassName="font-mono text-muted" />;
+  }
+  if (placeholder === "Weigh-in YYYY-MM-DDTHH:mm" && typeof value === "string" && onChangeText) {
+    return <DatePickerField label="Weigh-in" value={value} onChangeText={onChangeText} placeholder="Weigh-in YYYY-MM-DDTHH:mm" containerClassName="min-w-48 flex-1" inputClassName="font-sans text-base" labelClassName="font-mono text-muted" preserveTime />;
+  }
+  if (placeholder === "Session YYYY-MM-DDTHH:mm" && typeof value === "string" && onChangeText) {
+    return <DatePickerField label="Session start" value={value} onChangeText={onChangeText} placeholder="Session YYYY-MM-DDTHH:mm" containerClassName="min-w-48 flex-1" inputClassName="font-sans text-base" labelClassName="font-mono text-muted" preserveTime />;
+  }
+  return <NativeTextInput {...props} />;
 }
 
 function numeric(value: string, fallback = 0) {
