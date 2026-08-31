@@ -7,7 +7,7 @@ import { formatTonnage, getCoachReviewItems } from "../data/dashboardData";
 import { getProgramAnalytics } from "../data/programAnalytics";
 import { useProgramWorkspaceStore } from "../data/programWorkspaceStore";
 import { countryName } from "../data/countries";
-import { addAthleteFederationMembership, getAthleteCareer, getCoachingAssignments, linkAthleteExternalIdentity, revokeCoachingAssignment, updateAthleteCountry, type AthleteCareerResponse, type CoachingAssignmentResponse } from "../lib/platformApi";
+import { addAthleteFederationMembership, getAthleteCareer, getCoachingAssignments, linkAthleteExternalIdentity, revokeCoachingAssignment, type AthleteCareerResponse, type CoachingAssignmentResponse } from "../lib/platformApi";
 import { AppShell } from "./AppShell";
 import { DatePickerField } from "./DatePickerField";
 import { ipfClassification, ipfEligibleAgeDivisions, ipfWeightClasses, type CompetitionSex, type PowerliftingEquipment, type PowerliftingExperience } from "../data/competitionClassification";
@@ -158,8 +158,7 @@ export function ProfileScreen() {
   async function saveProfile() {
     const currentDraft = draft;
     const profile = currentProfile;
-    const currentSession = session;
-    if (!currentDraft || !profile || !currentSession) {
+    if (!currentDraft || !profile || !session) {
       return;
     }
 
@@ -182,26 +181,29 @@ export function ProfileScreen() {
       setValidationMessage("Country must use a two-letter ISO code, such as PH.");
       return;
     }
-    if (isLifter) await updateAthleteCountry(currentSession.accessToken, profile.id, countryCode || null);
-
-    await updateCurrentProfile({
-      displayName: currentDraft.displayName.trim(),
-      countryCode: countryCode || undefined,
-      bodyWeightKg: readPositiveNumber(currentDraft.bodyWeightKg, profile.bodyWeightKg),
-      dateOfBirth: currentDraft.dateOfBirth,
-      sex: currentDraft.sex,
-      competitionAgeDivision: currentDraft.competitionAgeDivision,
-      experience: currentDraft.experience,
-      equipment: currentDraft.equipment,
-      federationCode: currentDraft.federationCode,
-      competitionWeightClass: currentDraft.competitionWeightClass.trim() || "Unspecified",
-      squatOneRepMaxKg: readPositiveNumber(currentDraft.squatOneRepMaxKg, profile.squatOneRepMaxKg),
-      benchOneRepMaxKg: readPositiveNumber(currentDraft.benchOneRepMaxKg, profile.benchOneRepMaxKg),
-      deadliftOneRepMaxKg: readPositiveNumber(currentDraft.deadliftOneRepMaxKg, profile.deadliftOneRepMaxKg),
-      upcomingMeet: currentDraft.upcomingMeet.trim() || undefined
-    });
-    setValidationMessage(null);
-    setIsEditing(false);
+    try {
+      await updateCurrentProfile({
+        displayName: currentDraft.displayName.trim(),
+        countryCode: countryCode || undefined,
+        bodyWeightKg: readPositiveNumber(currentDraft.bodyWeightKg, profile.bodyWeightKg),
+        dateOfBirth: currentDraft.dateOfBirth,
+        sex: currentDraft.sex,
+        competitionAgeDivision: currentDraft.competitionAgeDivision,
+        experience: currentDraft.experience,
+        equipment: currentDraft.equipment,
+        federationCode: currentDraft.federationCode,
+        competitionWeightClass: currentDraft.competitionWeightClass.trim() || "Unspecified",
+        squatOneRepMaxKg: readPositiveNumber(currentDraft.squatOneRepMaxKg, profile.squatOneRepMaxKg),
+        benchOneRepMaxKg: readPositiveNumber(currentDraft.benchOneRepMaxKg, profile.benchOneRepMaxKg),
+        deadliftOneRepMaxKg: readPositiveNumber(currentDraft.deadliftOneRepMaxKg, profile.deadliftOneRepMaxKg),
+        upcomingMeet: currentDraft.upcomingMeet.trim() || undefined
+      });
+      setValidationMessage(null);
+      setIsEditing(false);
+    }
+    catch (reason) {
+      setValidationMessage(reason instanceof Error ? reason.message : "Could not save the profile.");
+    }
   }
 
   async function refreshCareer() {

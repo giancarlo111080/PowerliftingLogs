@@ -1,0 +1,8 @@
+path: datasets/bar_path
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: barbell
+kpt_shape: [2, 3]
+flip_idx: [1, 0]

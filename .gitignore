@@ -15,6 +15,13 @@ client/web-build/
 .env.*
 !.env.example
 
+# Python
+.venv-bar-path/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
 # OS and editor state
 .DS_Store
 .vscode/
@@ -24,3 +31,11 @@ client/web-build/
 .azure/*/
 !.azure/config.json
 !.azure/.env.template
+
+# Local ML data and generated models
+ml/bar_path/source_videos/*
+!ml/bar_path/source_videos/metadata.csv
+ml/bar_path/datasets/
+ml/bar_path/runs/
+ml/bar_path/models/
+

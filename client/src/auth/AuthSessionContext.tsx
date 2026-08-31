@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState, type PropsWithChildren 
 import { Platform } from "react-native";
 import type { CompetitionSex, PowerliftingEquipment, PowerliftingExperience } from "../data/competitionClassification";
 
-import { acceptCoachInvitation, getCoachAthletes, getCurrentAccount, leaveCurrentCoach, registerAccount, signIn, updateCurrentAccount, type AccountResponse, type PlatformRole } from "../lib/platformApi";
+import { acceptCoachInvitation, getCoachAthletes, getCurrentAccount, leaveCurrentCoach, PlatformApiError, registerAccount, signIn, updateCurrentAccount, type AccountResponse, type PlatformRole } from "../lib/platformApi";
 
 export type { PlatformRole } from "../lib/platformApi";
 
@@ -302,10 +302,27 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
     if (!currentProfile || !session) {
       return;
     }
-    const account = await updateCurrentAccount(session.accessToken, { ...currentProfile, ...changes });
-    const persistedProfile = { ...currentProfile, ...profileFromAccount(account), ...changes, notificationsEnabled: changes.notificationsEnabled ?? currentProfile.notificationsEnabled };
-    const nextProfiles = profiles.map((profile) => profile.userId === session.userId ? persistedProfile : profile);
-    await persist(session, nextProfiles);
+    const optimisticProfile = {
+      ...currentProfile,
+      ...changes,
+      initials: initials(changes.displayName ?? currentProfile.displayName),
+      notificationsEnabled: changes.notificationsEnabled ?? currentProfile.notificationsEnabled
+    };
+    const optimisticProfiles = profiles.map((profile) => profile.userId === session.userId ? optimisticProfile : profile);
+    await persist(session, optimisticProfiles);
+    try {
+      const account = await updateCurrentAccount(session.accessToken, optimisticProfile);
+      const persistedProfile = { ...optimisticProfile, ...profileFromAccount(account), ...changes, notificationsEnabled: optimisticProfile.notificationsEnabled };
+      const nextProfiles = optimisticProfiles.map((profile) => profile.userId === session.userId ? persistedProfile : profile);
+      await persist(session, nextProfiles);
+    }
+    catch (reason) {
+      if (reason instanceof PlatformApiError && reason.status === 0) {
+        return;
+      }
+      await persist(session, profiles);
+      throw reason;
+    }
   }
 
   async function leaveCoach() {
